@@ -1,0 +1,23 @@
+# Binaires compilés
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Fichiers de test
+*.test
+*.out
+
+# Dossiers de dépendances vendor (si utilisé un jour)
+vendor/
+
+# Fichiers d'environnement/IDE
+.env
+.vscode/
+.idea/
+
+# Fichiers de coverage
+coverage.txt
+coverage.htmlcomprehension.txt
+comprehension.txt

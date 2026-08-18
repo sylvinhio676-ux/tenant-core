@@ -19,5 +19,5 @@ vendor/
 
 # Fichiers de coverage
 coverage.txt
-coverage.htmlcomprehension.txt
-comprehension.txt
+coverage.html
+doc/

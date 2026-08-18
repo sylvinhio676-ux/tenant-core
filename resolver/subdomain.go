@@ -41,8 +41,8 @@ func (sr *SubdomainResolver) Resolve(r *http.Request) (tenant.TenantID, error) {
 	}
 
 	if subdomain == "" || strings.Contains(subdomain, ".") {
-		return "", ErrNoTenant
-	}
+    return "", ErrNoTenant
+}
 
 	return tenant.TenantID(subdomain), nil
 }

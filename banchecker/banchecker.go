@@ -7,7 +7,6 @@ import (
 
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 	"github.com/sylvinhio676-ux/tenant-core/eventbus"
-	"github.com/sylvinhio676-ux/tenant-core/store"
 )
 
 /**
@@ -83,7 +82,7 @@ func (bc *BanChecker) IsBanned(id tenant.TenantID) bool {
 	événements passés (cahier des charges section 6/11). Doit être appelée
 	après Subscribe (voir New).
  */
-func (bc *BanChecker) LoadInitialBannedList(ctx context.Context, source store.Store, ids []tenant.TenantID) error {
+func (bc *BanChecker) LoadInitialBannedList(ctx context.Context, source tenant.Store, ids []tenant.TenantID) error {
 	snapshotTime := time.Now()
 	for _, id := range ids {
 		banned, err := source.IsBanned(ctx, id)

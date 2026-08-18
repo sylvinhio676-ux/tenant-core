@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
 	tenant "github.com/sylvinhio676-ux/tenant-core"
+	"golang.org/x/sync/singleflight"
 )
 
 type cacheEntry struct {
@@ -15,16 +15,16 @@ type cacheEntry struct {
 }
 
 type CachedStore struct {
-	source Store
+	source tenant.Store
 	ttl    time.Duration
 
 	mu    sync.RWMutex
 	cache map[tenant.TenantID]cacheEntry
 
-	group singleflight.Group // déduplique les appels concurrents vers source
+	group singleflight.Group
 }
 
-func NewCachedStore(source Store, ttl time.Duration) *CachedStore {
+func NewCachedStore(source tenant.Store, ttl time.Duration) *CachedStore {
 	return &CachedStore{
 		source: source,
 		ttl:    ttl,
@@ -41,8 +41,6 @@ func (cs *CachedStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Ten
 		return entry.tenant, nil
 	}
 
-	// singleflight garantit qu'un seul appel réel part vers la source
-	// pour cette clé, même si plusieurs goroutines arrivent ici en même temps
 	v, err, _ := cs.group.Do(string(id), func() (interface{}, error) {
 		t, err := cs.source.Get(ctx, id)
 		if err != nil {
@@ -60,4 +58,8 @@ func (cs *CachedStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Ten
 		return nil, err
 	}
 	return v.(*tenant.Tenant), nil
+}
+
+func (cs *CachedStore) IsBanned(ctx context.Context, id tenant.TenantID) (bool, error) {
+	return cs.source.IsBanned(ctx, id)
 }

@@ -65,10 +65,12 @@ func WithStore(s Store) Option {
 	}
 }
 
-// New crée un Manager à partir des options fournies. Panique si Resolver
-// ou Store ne sont pas configurés — une erreur de configuration du
-// programme doit être détectée immédiatement, pas gérée comme une erreur
-// de traitement de requête.
+/**
+ * New crée un Manager à partir des options fournies. Panique si Resolver
+	ou Store ne sont pas configurés — une erreur de configuration du
+	programme doit être détectée immédiatement, pas gérée comme une erreur
+	de traitement de requête.
+ */
 func New(options ...Option) *Manager {
 	m := &Manager{}
 	for _, opt := range options {

@@ -13,7 +13,7 @@ Most Go frameworks treat multi-tenancy as an application-level concern. tenant-c
 
 ## Status
 
-🚧 Early development — not yet ready for production use. Following an open build-in-public roadmap.
+🚧 **Active development** — core architecture complete and tested (resolution, store/cache, real-time ban propagation, rate limiting, RBAC, metrics, framework adapters for net/http/Gin/Echo/Chi, Admin API, Redis-based multi-instance propagation, test helpers). Not yet benchmarked or hardened for production — performance validation, profiling, and load testing are still ahead. Not tagged/released yet.
 
 ## Installation
 
@@ -28,6 +28,10 @@ tm := tenant.New(
     tenant.WithResolver(resolver.Subdomain()),
 )
 \`\`\`
+
+## Documentation
+
+Pour une documentation technique complète (architecture, décisions de conception, concurrence, limites connues), voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

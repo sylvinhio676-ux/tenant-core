@@ -20,4 +20,4 @@ vendor/
 # Fichiers de coverage
 coverage.txt
 coverage.html
-doc/
+# doc/

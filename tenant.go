@@ -5,6 +5,8 @@ import (
 	"net/http"
 )
 
+
+
 type TenantID string
 
 // State représente l'état d'un tenant.
@@ -37,6 +39,18 @@ type Resolver interface {
 type Store interface {
 	Get(ctx context.Context, id TenantID) (*Tenant, error)
 	IsBanned(ctx context.Context, id TenantID) (bool, error)
+}
+
+/**
+ * AdminStore expose les capacités d'écriture nécessaires à l'administration
+	des tenants (création, modification, changement d'état). Séparée de
+	Store, qui reste strictement en lecture pour le chemin de résolution
+	normal — Manager ne dépend jamais de AdminStore.
+ */
+type AdminStore interface {
+	Create(ctx context.Context, t *Tenant) error
+	Update(ctx context.Context, t *Tenant) error
+	SetState(ctx context.Context, id TenantID, state State) error
 }
 
 // Manager assemble les composants du toolkit et orchestre le chemin de
@@ -106,3 +120,4 @@ func (m *Manager) Resolve(r *http.Request) (*Tenant, error) {
 
 	return t, nil
 }
+

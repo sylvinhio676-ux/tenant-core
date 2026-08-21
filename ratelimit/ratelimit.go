@@ -36,6 +36,21 @@ func (rl *TenantRateLimiter) Allow(t *tenant.Tenant) bool {
 	return limiter.Allow()
 }
 
+// getLimiter retourne le *rate.Limiter du tenant, le créant s'il n'existe
+// pas encore.
+//
+// Compromis connu et mesuré (voir ratelimit/loadorstore_bench_test.go) :
+// LoadOrStore garantit qu'un seul *rate.Limiter est finalement stocké par
+// tenant, mais N goroutines qui rencontrent simultanément un NOUVEAU
+// tenant construisent chacune leur propre candidat avant la déduplication
+// (N candidats créés, 1 seul conservé — confirmé expérimentalement).
+// Ce gaspillage ne se produit qu'à la toute première initialisation d'un
+// tenant, jamais sur le chemin chaud (0 allocation, benchmarké stable de
+// 1 à 1000 tenants). Accepté pour la V1 afin de garder le chemin chaud
+// sans verrou explicite ; à réévaluer si un profil de production réel
+// montre une pression GC significative liée à la création massive de
+// nouveaux tenants.
+
 func (rl *TenantRateLimiter) getLimiter(t *tenant.Tenant) *rate.Limiter {
 	if v, ok := rl.limiters.Load(t.ID); ok {
 		return v.(*rate.Limiter)

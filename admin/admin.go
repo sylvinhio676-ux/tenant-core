@@ -20,12 +20,30 @@ import (
 // the event may be lost until manual resynchronization or a
 // future durable-delivery mechanism (Outbox pattern).
 type Service struct {
-	store tenant.AdminStore
-	bus   eventbus.EventBus
+	store      tenant.AdminStore
+	bus        eventbus.EventBus
+	retryQueue *PublishRetryQueue
 }
 
-func NewAdminService(store tenant.AdminStore, bus eventbus.EventBus) *Service {
-	return &Service{store: store, bus: bus}
+// ServiceOption configures a Service at creation time.
+type ServiceOption func(*Service)
+
+// WithPublishRetryQueue configures a best-effort in-memory retry queue,
+// used when EventBus.Publish fails after a successful AdminStore.SetState.
+// Without this option, a Publish failure is only logged (see transition),
+// with no further attempt to deliver the event.
+func WithPublishRetryQueue(q *PublishRetryQueue) ServiceOption {
+	return func(s *Service) {
+		s.retryQueue = q
+	}
+}
+
+func NewAdminService(store tenant.AdminStore, bus eventbus.EventBus, opts ...ServiceOption) *Service {
+	s := &Service{store: store, bus: bus}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Service) transition(ctx context.Context, id tenant.TenantID, state tenant.State) error {
@@ -44,6 +62,9 @@ func (s *Service) transition(ctx context.Context, id tenant.TenantID, state tena
 			"ERROR tenant state changed but event publication failed: tenant_id=%s state=%s error=%v",
 			id, state, err,
 		)
+		if s.retryQueue != nil {
+			s.retryQueue.Enqueue(event)
+		}
 		return err
 	}
 

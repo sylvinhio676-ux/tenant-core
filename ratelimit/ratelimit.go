@@ -7,6 +7,15 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// RateLimiter decides whether a request for a given tenant is allowed
+// right now. Implementations differ in where the quota state lives —
+// TenantRateLimiter keeps it in local process memory; ratelimit/redis's
+// RedisRateLimiter shares it across instances via Redis — but every
+// caller only ever needs this one method.
+type RateLimiter interface {
+	Allow(t *tenant.Tenant) bool
+}
+
 // LimitFunc determines the requests-per-second limit applicable to a
 // given tenant. Injected from the application, so TenantRateLimiter
 // stays entirely independent of business logic (plans, subscriptions...).
@@ -18,6 +27,8 @@ type TenantRateLimiter struct {
 	burst     int
 	limiters  sync.Map // TenantID -> *rate.Limiter
 }
+
+var _ RateLimiter = (*TenantRateLimiter)(nil)
 
 // NewTenantRateLimiter creates a TenantRateLimiter. burst is the allowed
 // burst size, identical for all tenants (simplification for

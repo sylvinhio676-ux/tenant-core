@@ -1750,7 +1750,7 @@ RateLimiter
      │
      ├── MemoryRateLimiter
      │
-     └── RedisRateLimiter (future evolution)
+     └── RedisRateLimiter (ratelimit/redis, see §7.16)
 ```
 
 ### 7.15 Tests to plan
@@ -1759,7 +1759,21 @@ RateLimiter
 
 **CacheKeyer** — verify that `tenant-A + users:123` and `tenant-B + users:123` produce different keys (`tenant-A:users:123 != tenant-B:users:123`) — a fundamental isolation test.
 
-### 7.16 Step 4 summary
+### 7.16 RedisRateLimiter — the distributed alternative
+
+`ratelimit.TenantRateLimiter` (described above) keeps its quota state in local process memory via `sync.Map` — extremely fast (hundreds of nanoseconds per call, see `ratelimit/ratelimit_bench_test.go`), with zero infrastructure dependency, but each instance of the application enforces its own, independent quota. In a multi-instance deployment, a tenant limited to 100 req/min could in principle send up to `100 × N` requests per minute across `N` instances before any single instance's local limiter would reject anything.
+
+`ratelimit/redis` (a separate Go sub-module, same reasoning as `middleware/gin`/`eventbus/redis` — no consumer of the core is forced to pull in a Redis client) provides `RedisRateLimiter`, satisfying the same `ratelimit.RateLimiter` interface (`Allow(t *tenant.Tenant) bool`) but storing the counter in Redis, so the quota is genuinely shared across every instance pointed at the same Redis server.
+
+**This is a deliberate trade-off, not a strictly better replacement**:
+
+- **Latency.** `TenantRateLimiter.Allow()` runs in roughly 320-460ns. `RedisRateLimiter.Allow()` measured at roughly 816µs per call even against `miniredis` (an in-process fake Redis, over TCP loopback) — a real, remote Redis would add further network latency on top. That is on the order of 2,000x slower. `RedisRateLimiter` is not a drop-in performance-equivalent swap; it is what you reach for specifically when a shared quota matters more than that cost.
+- **Algorithm precision.** `RedisRateLimiter` implements a fixed window counter (a Redis key per tenant per window, atomically incremented and TTL'd by a single Lua script), not a sliding window or a true distributed token bucket. A known, accepted consequence: a tenant can legally send up to the limit right before a window boundary and the same limit again right after it, so in the worst case roughly 2x the configured quota can go through within a short span straddling two windows. This is a simple, one-round-trip V1 — not a claim of perfectly precise distributed rate limiting.
+- **Failure mode.** When Redis is unreachable, `RedisRateLimiter` falls back to an explicit, configurable `FailurePolicy`: `FailOpen` (default — allow the request, favoring availability) or `FailClosed` (deny it, favoring strict enforcement). `TenantRateLimiter` has no equivalent failure mode since it has no external dependency to fail.
+
+**Recommendation**: use `TenantRateLimiter` by default. Reach for `RedisRateLimiter` only when running multiple instances and a tenant's quota genuinely must be enforced as one shared budget across all of them — and accept, going in, both the latency cost and the fixed-window approximation documented above.
+
+### 7.17 Step 4 summary
 
 | Component | Responsibility | Must not know about |
 |---|---|---|
@@ -3953,7 +3967,7 @@ This section gathers all the limitations **explicitly documented** along the way
 | `RedisEventBus` tests | Covered via `miniredis` (simulation) | `miniredis` doesn't guarantee every subtlety of a real Redis server | Integration test with a real Redis, as a complement, not a replacement |
 | `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | No full HTTP pipeline simulation | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — only if a real need arises |
 | `Prometheus` (Metrics) | `MetricsCollector` interface defined + in-memory implementation | No concrete Prometheus adapter built at this stage | `PrometheusMetrics` implementation satisfying the same contract |
-| Distributed `RateLimiter` | In-memory implementation (per instance) | Quotas are not shared across multiple server instances | `RedisRateLimiter`, on the same agnosticism principle as `EventBus` |
+| Distributed `RateLimiter` | `ratelimit/redis`'s `RedisRateLimiter` exists, satisfying the same `ratelimit.RateLimiter` interface (see §7.16) | Fixed window counter (not a true token bucket) — up to ~2x the configured quota can pass at a window boundary; ~2,000x the latency of the local `TenantRateLimiter` | A sliding-window or token-bucket-accurate distributed algorithm, if the fixed-window approximation proves insufficient in practice |
 | `go.mod` — `replace` directive (sub-modules) | Used for local development before publishing | Points to a local path (`../..`), invalid for a real external user | To be removed once the root module is tagged and published |
 
 > **Cross-cutting rule to remember**: every limitation above was **explicitly documented in the code at the moment it was identified** (comments, log messages), rather than left implicit — consistent with the project's general principle of preferring an *observable* inconsistency today over a premature false solution.

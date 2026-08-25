@@ -2,12 +2,10 @@ module github.com/sylvinhio676-ux/tenant-core/middleware/gin
 
 go 1.26.4
 
-replace github.com/sylvinhio676-ux/tenant-core => ../..
-
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/stretchr/testify v1.11.1
-	github.com/sylvinhio676-ux/tenant-core v0.0.0-00010101000000-000000000000
+	github.com/sylvinhio676-ux/tenant-core v0.1.0
 )
 
 require (

@@ -2,10 +2,9 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"net/http"
 )
-
-
 
 type TenantID string
 
@@ -13,14 +12,14 @@ type TenantID string
 type State string
 
 const (
-    // Active means the tenant can process requests normally.
-    Active State = "active"
-    // Disabled means the tenant is disabled (e.g. subscription ended).
-    // Disabling tolerates a propagation delay (cache TTL).
-    Disabled State = "disabled"
-    // Banned means the tenant is banned for fraud/abuse.
-    // Banning must be applied immediately, with no cache delay.
-    Banned State = "banned"
+	// Active means the tenant can process requests normally.
+	Active State = "active"
+	// Disabled means the tenant is disabled (e.g. subscription ended).
+	// Disabling tolerates a propagation delay (cache TTL).
+	Disabled State = "disabled"
+	// Banned means the tenant is banned for fraud/abuse.
+	// Banning must be applied immediately, with no cache delay.
+	Banned State = "banned"
 )
 
 // Tenant represents an isolated client of the multi-tenant system.
@@ -41,17 +40,34 @@ type Store interface {
 	IsBanned(ctx context.Context, id TenantID) (bool, error)
 }
 
-/**
- * AdminStore exposes the write capabilities needed for tenant
- administration (creation, modification, state changes). Separated from
- Store, which remains strictly read-only for the normal resolution
- path — Manager never depends on AdminStore.
- */
+/*
+*
+  - AdminStore exposes the write capabilities needed for tenant
+    administration (creation, modification, state changes). Separated from
+    Store, which remains strictly read-only for the normal resolution
+    path — Manager never depends on AdminStore.
+*/
 type AdminStore interface {
 	Create(ctx context.Context, t *Tenant) error
 	Update(ctx context.Context, t *Tenant) error
 	SetState(ctx context.Context, id TenantID, state State) error
 }
+
+// ErrTenantNotFound is the sentinel error a Store/AdminStore
+// implementation must return (directly, or wrapped with %w) when the
+// requested tenant does not exist. This is part of the Store/AdminStore
+// contract, not just a MemoryStore detail: callers such as
+// admin.HTTPHandler rely on errors.Is(err, tenant.ErrTenantNotFound) to
+// map it to the correct HTTP status, regardless of which Store
+// implementation is actually in use.
+var ErrTenantNotFound = errors.New("tenant not found")
+
+// ErrTenantAlreadyExists is the sentinel error an AdminStore
+// implementation must return (directly, or wrapped with %w) from Create
+// when the given tenant ID is already in use. Same contract as
+// ErrTenantNotFound: every implementation must reuse this error, never
+// define its own equivalent.
+var ErrTenantAlreadyExists = errors.New("tenant already exists")
 
 // Manager assembles the toolkit's components and orchestrates the path
 // from resolving an HTTP request to a tenant context.
@@ -79,11 +95,12 @@ func WithStore(s Store) Option {
 	}
 }
 
-/**
- * New creates a Manager from the given options. Panics if Resolver
- or Store are not configured — a program configuration error must be
- caught immediately, not handled as a request processing error.
- */
+/*
+*
+  - New creates a Manager from the given options. Panics if Resolver
+    or Store are not configured — a program configuration error must be
+    caught immediately, not handled as a request processing error.
+*/
 func New(options ...Option) *Manager {
 	m := &Manager{}
 	for _, opt := range options {
@@ -100,12 +117,13 @@ func New(options ...Option) *Manager {
 	return m
 }
 
-/**
- * Resolve identifies the tenant from an HTTP request, then retrieves
+/*
+*
+  - Resolve identifies the tenant from an HTTP request, then retrieves
     its full information. Does NOT build a context.Context —
     that responsibility belongs to the tenantctx package, used by
     middlewares (see spec section 7, request path).
- */
+*/
 func (m *Manager) Resolve(r *http.Request) (*Tenant, error) {
 	id, err := m.resolver.Resolve(r)
 	if err != nil {

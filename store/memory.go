@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	tenant "github.com/sylvinhio676-ux/tenant-core"
@@ -11,12 +10,17 @@ import (
 var _ tenant.Store = (*MemoryStore)(nil)
 var _ tenant.AdminStore = (*MemoryStore)(nil)
 
-// ErrTenantNotFound is returned when a tenant does not exist in the store.
-var ErrTenantNotFound = errors.New("tenant: not found")
+// ErrTenantNotFound is an alias for tenant.ErrTenantNotFound, kept so
+// existing callers using errors.Is(err, store.ErrTenantNotFound) (or a
+// direct equality check) keep working unchanged now that the sentinel
+// lives in the root tenant package as part of the Store/AdminStore
+// contract.
+var ErrTenantNotFound = tenant.ErrTenantNotFound
 
-// ErrTenantAlreadyExists is returned when attempting to create a tenant
-// whose ID already exists.
-var ErrTenantAlreadyExists = errors.New("tenant: already exists")
+// ErrTenantAlreadyExists is an alias for tenant.ErrTenantAlreadyExists —
+// see ErrTenantNotFound for why this is an alias rather than a distinct
+// value.
+var ErrTenantAlreadyExists = tenant.ErrTenantAlreadyExists
 
 type MemoryStore struct {
 	mu      sync.RWMutex

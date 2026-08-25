@@ -205,3 +205,47 @@ func TestHTTPHandler_AuthenticationFailure_DoesNotExecuteOperation(t *testing.T)
 	// The authenticator must have been invoked exactly once.
 	assert.Equal(t, 1, fake.calls)
 }
+
+func TestHTTPHandler_Ban_TenantNotFound(t *testing.T) {
+	store := &fakeAdminStore{setStateErr: tenant.ErrTenantNotFound}
+	bus := eventbus.NewMemoryEventBus()
+
+	service := NewAdminService(store, bus)
+	handler := NewHTTPHandler(service)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/tenants/acme/ban",
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	// A missing tenant must be reported as 404, not the generic 500.
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+	assert.JSONEq(t, `{"error":"tenant not found"}`, recorder.Body.String())
+}
+
+func TestHTTPHandler_Ban_GenericError_Returns500(t *testing.T) {
+	store := &fakeAdminStore{setStateErr: errors.New("store unavailable")}
+	bus := eventbus.NewMemoryEventBus()
+
+	service := NewAdminService(store, bus)
+	handler := NewHTTPHandler(service)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/tenants/acme/ban",
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	// An unclassified error must keep falling back to 500 (non-regression).
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.JSONEq(t, `{"error":"store unavailable"}`, recorder.Body.String())
+}

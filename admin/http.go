@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	tenant "github.com/sylvinhio676-ux/tenant-core"
@@ -101,8 +102,20 @@ func (h *HTTPHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// writeError maps err to the appropriate HTTP status and writes it as a
+// JSON body. Known sentinel errors from the Store/AdminStore contract get
+// their specific status; any other error falls back to 500, since its
+// cause cannot be classified here.
 func writeError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, tenant.ErrTenantNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, tenant.ErrTenantAlreadyExists):
+		status = http.StatusConflict
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }

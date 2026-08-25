@@ -2,12 +2,10 @@ module github.com/sylvinhio676-ux/tenant-core/middleware/echo
 
 go 1.26.4
 
-replace github.com/sylvinhio676-ux/tenant-core => ../..
-
 require (
 	github.com/labstack/echo/v4 v4.15.4
 	github.com/stretchr/testify v1.11.1
-	github.com/sylvinhio676-ux/tenant-core v0.0.0-00010101000000-000000000000
+	github.com/sylvinhio676-ux/tenant-core v0.1.0
 )
 
 require (

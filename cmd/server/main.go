@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +28,19 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
+	// 0. Configuration — resolved from the environment (PORT,
+	// TENANT_BASE_DOMAIN, CACHE_TTL_SECONDS), falling back to defaults when
+	// a variable is absent. A variable that is present but invalid is a
+	// configuration error, caught here before anything else starts.
+	cfg, err := loadServerConfig()
+	if err != nil {
+		log.Fatalf("configuration error: %v", err)
+	}
+	log.Printf(
+		"config: port=%d tenant_base_domain=%s cache_ttl=%s",
+		cfg.port, cfg.tenantBaseDomain, cfg.cacheTTL,
+	)
+
 	// 1. Store — in-memory source of truth for this demonstration.
 	memStore := store.NewMemoryStore()
 
@@ -41,11 +55,11 @@ func main() {
 		Roles: []string{"viewer"},
 	})
 
-	cachedStore := store.NewCachedStore(memStore, 10*time.Second)
+	cachedStore := store.NewCachedStore(memStore, cfg.cacheTTL)
 
 	// 2. Resolver — identifies the tenant from the subdomain.
-	//    E.g. acme.localhost:8080 → TenantID("acme")
-	subdomainResolver := resolver.NewSubdomainResolver("localhost")
+	//    E.g. acme.<TENANT_BASE_DOMAIN>:<PORT> → TenantID("acme")
+	subdomainResolver := resolver.NewSubdomainResolver(cfg.tenantBaseDomain)
 
 	// 3. Manager — assembles Resolver + Store.
 	manager := tenant.New(
@@ -103,15 +117,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	addr := fmt.Sprintf(":%d", cfg.port)
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    addr,
 		Handler: handler,
 	}
 
 	go func() {
-		log.Println("listening on :8080")
-		log.Println(`try: curl -H "Host: acme.localhost" http://localhost:8080/api/me`)
-		log.Println(`try: curl -H "Host: globex.localhost" http://localhost:8080/api/users  (expects 403 — globex only has users:read)`)
+		log.Printf("listening on %s", addr)
+		log.Printf(`try: curl -H "Host: acme.%s" http://localhost:%d/api/me`, cfg.tenantBaseDomain, cfg.port)
+		log.Printf(`try: curl -H "Host: globex.%s" http://localhost:%d/api/users  (expects 403 — globex only has users:read)`, cfg.tenantBaseDomain, cfg.port)
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
@@ -129,7 +144,7 @@ func main() {
 	defer cancel()
 
 	log.Println("shutting down server...")
-	err := server.Shutdown(shutdownCtx)
+	err = server.Shutdown(shutdownCtx)
 
 	switch {
 	case err == nil:

@@ -9,9 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Middleware retourne un middleware Gin qui résout le tenant et l'injecte
-// dans le contexte standard de la requête (accessible ensuite via
-// tenantctx.FromContext), quel que soit le framework utilisé.
+// Middleware returns a Gin middleware that resolves the tenant and injects
+// it into the request's standard context (accessible afterwards via
+// tenantctx.FromContext), regardless of the framework used.
 func Middleware(m *tenant.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		t, err := m.Resolve(c.Request)

@@ -15,7 +15,7 @@ import (
 )
 
 func TestRedisEventBus_PublishAndSubscribe(t *testing.T) {
-	// Given : un miniredis en mémoire, aucun vrai Redis nécessaire
+	// Given: an in-memory miniredis, no real Redis needed
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	defer mr.Close()
@@ -29,7 +29,7 @@ func TestRedisEventBus_PublishAndSubscribe(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// When : on publie un événement
+	// When: an event is published
 	sent := eventbus.TenantEvent{
 		TenantID:  "tenant-A",
 		State:     tenant.Banned,
@@ -38,7 +38,7 @@ func TestRedisEventBus_PublishAndSubscribe(t *testing.T) {
 	err = bus.Publish(context.Background(), sent)
 	require.NoError(t, err)
 
-	// Then : l'événement doit être reçu, correctement désérialisé
+	// Then: the event must be received, correctly deserialized
 	select {
 	case received := <-events:
 		assert.Equal(t, sent.TenantID, received.TenantID)
@@ -50,13 +50,13 @@ func TestRedisEventBus_PublishAndSubscribe(t *testing.T) {
 }
 
 func TestRedisEventBus_SubscribeFailsWhenRedisUnavailable(t *testing.T) {
-	// Given : un client pointant vers une adresse qui n'a aucun serveur Redis
+	// Given: a client pointing to an address with no Redis server
 	client := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"})
 	bus := New(client, "tenant-events")
 
 	err := bus.Subscribe(func(event eventbus.TenantEvent) {})
 
-	// Then : Subscribe() doit échouer immédiatement (fail-fast), pas
-	// silencieusement.
+	// Then: Subscribe() must fail immediately (fail-fast), not
+	// silently.
 	assert.Error(t, err)
 }

@@ -9,43 +9,43 @@ import (
 
 type TenantID string
 
-// State représente l'état d'un tenant.
+// State represents the state of a tenant.
 type State string
 
 const (
-    // Active signifie que le tenant peut traiter des requêtes normalement.
+    // Active means the tenant can process requests normally.
     Active State = "active"
-    // Disabled signifie que le tenant est désactivé (ex: fin d'abonnement).
-    // La désactivation tolère un délai de propagation (cache TTL).
+    // Disabled means the tenant is disabled (e.g. subscription ended).
+    // Disabling tolerates a propagation delay (cache TTL).
     Disabled State = "disabled"
-    // Banned signifie que le tenant est banni pour fraude/abus.
-    // Le bannissement doit être appliqué immédiatement, sans délai de cache.
+    // Banned means the tenant is banned for fraud/abuse.
+    // Banning must be applied immediately, with no cache delay.
     Banned State = "banned"
 )
 
-// Tenant représente un client isolé du système multi-tenant.
+// Tenant represents an isolated client of the multi-tenant system.
 type Tenant struct {
 	ID    TenantID
 	State State
 	Roles []string
 }
 
-// Resolver identifie le tenant à partir d'une requête HTTP entrante.
+// Resolver identifies the tenant from an incoming HTTP request.
 type Resolver interface {
 	Resolve(r *http.Request) (TenantID, error)
 }
 
-// Store est la source de vérité pour l'état des tenants.
+// Store is the source of truth for tenant state.
 type Store interface {
 	Get(ctx context.Context, id TenantID) (*Tenant, error)
 	IsBanned(ctx context.Context, id TenantID) (bool, error)
 }
 
 /**
- * AdminStore expose les capacités d'écriture nécessaires à l'administration
-	des tenants (création, modification, changement d'état). Séparée de
-	Store, qui reste strictement en lecture pour le chemin de résolution
-	normal — Manager ne dépend jamais de AdminStore.
+ * AdminStore exposes the write capabilities needed for tenant
+ administration (creation, modification, state changes). Separated from
+ Store, which remains strictly read-only for the normal resolution
+ path — Manager never depends on AdminStore.
  */
 type AdminStore interface {
 	Create(ctx context.Context, t *Tenant) error
@@ -53,26 +53,26 @@ type AdminStore interface {
 	SetState(ctx context.Context, id TenantID, state State) error
 }
 
-// Manager assemble les composants du toolkit et orchestre le chemin de
-// résolution d'une requête HTTP vers un contexte tenant.
+// Manager assembles the toolkit's components and orchestrates the path
+// from resolving an HTTP request to a tenant context.
 type Manager struct {
 	resolver Resolver
 	store    Store
 }
 
-// Option configure un Manager au moment de sa création.
+// Option configures a Manager at creation time.
 type Option func(*Manager)
 
-// WithResolver définit le Resolver utilisé pour identifier le tenant
-// depuis une requête HTTP. Obligatoire.
+// WithResolver sets the Resolver used to identify the tenant
+// from an HTTP request. Required.
 func WithResolver(r Resolver) Option {
 	return func(m *Manager) {
 		m.resolver = r
 	}
 }
 
-// WithStore définit le Store utilisé pour récupérer les informations
-// complètes d'un tenant. Obligatoire.
+// WithStore sets the Store used to retrieve a tenant's full
+// information. Required.
 func WithStore(s Store) Option {
 	return func(m *Manager) {
 		m.store = s
@@ -80,10 +80,9 @@ func WithStore(s Store) Option {
 }
 
 /**
- * New crée un Manager à partir des options fournies. Panique si Resolver
-	ou Store ne sont pas configurés — une erreur de configuration du
-	programme doit être détectée immédiatement, pas gérée comme une erreur
-	de traitement de requête.
+ * New creates a Manager from the given options. Panics if Resolver
+ or Store are not configured — a program configuration error must be
+ caught immediately, not handled as a request processing error.
  */
 func New(options ...Option) *Manager {
 	m := &Manager{}
@@ -102,10 +101,10 @@ func New(options ...Option) *Manager {
 }
 
 /**
- * Resolve identifie le tenant à partir d'une requête HTTP, puis récupère
-    ses informations complètes. Ne construit PAS de context.Context —
-    cette responsabilité appartient au package tenantctx, utilisé par les
-    middlewares (voir cahier des charges section 7, chemin de requête).
+ * Resolve identifies the tenant from an HTTP request, then retrieves
+    its full information. Does NOT build a context.Context —
+    that responsibility belongs to the tenantctx package, used by
+    middlewares (see spec section 7, request path).
  */
 func (m *Manager) Resolve(r *http.Request) (*Tenant, error) {
 	id, err := m.resolver.Resolve(r)
@@ -120,4 +119,3 @@ func (m *Manager) Resolve(r *http.Request) (*Tenant, error) {
 
 	return t, nil
 }
-

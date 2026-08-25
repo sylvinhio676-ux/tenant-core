@@ -7,11 +7,11 @@ import (
 	"github.com/sylvinhio676-ux/tenant-core/tenantctx"
 )
 
-// Middleware retourne un middleware Chi qui résout le tenant et l'injecte
-// dans le contexte standard de la requête.
+// Middleware returns a Chi middleware that resolves the tenant and injects
+// it into the request's standard context.
 //
-// Si le tenant ne peut pas être résolu ou récupéré, la requête est rejetée
-// avec une réponse HTTP 404.
+// If the tenant cannot be resolved or retrieved, the request is rejected
+// with an HTTP 404 response.
 func Middleware(m *tenant.Manager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -9,20 +9,20 @@ import (
 	"golang.org/x/time/rate"
 )
 
-//Benchmark A — chemin chaud
+//Benchmark A — hot path
 func BenchmarkRateLimiter_Allow_Warm(b *testing.B) {
 	tenantCounts := []int{1, 10, 100, 1000}
 
 	for _, count := range tenantCounts {
 		b.Run(fmt.Sprintf("%d_tenants", count), func(b *testing.B) {
 			rl := NewTenantRateLimiter(func(t *tenant.Tenant) rate.Limit {
-				return rate.Limit(1e9) // très large, pour ne jamais bloquer dans ce benchmark
+				return rate.Limit(1e9) // very large, to never block in this benchmark
 			}, 1e9)
 
 			tenants := make([]*tenant.Tenant, count)
 			for i := 0; i < count; i++ {
 				tenants[i] = &tenant.Tenant{ID: tenant.TenantID(fmt.Sprintf("tenant-%d", i))}
-				rl.Allow(tenants[i]) // pré-création du limiteur pour chaque tenant
+				rl.Allow(tenants[i]) // pre-create the limiter for each tenant
 			}
 
 			b.ResetTimer()
@@ -34,7 +34,7 @@ func BenchmarkRateLimiter_Allow_Warm(b *testing.B) {
 	}
 }
 
-//Benchmark B — initialisation concurrente, même tenant
+//Benchmark B — concurrent initialization, same tenant
 func BenchmarkRateLimiter_ConcurrentInit_SameTenant(b *testing.B) {
 	goroutineCounts := []int{1, 2, 4, 8, 16, 32}
 
@@ -60,7 +60,7 @@ func BenchmarkRateLimiter_ConcurrentInit_SameTenant(b *testing.B) {
 	}
 }
 
-//Benchmark C — initialisation parallèle de tenants différents
+//Benchmark C — parallel initialization of different tenants
 func BenchmarkRateLimiter_ConcurrentInit_DifferentTenants(b *testing.B) {
 	tenantCounts := []int{10, 100, 1000}
 

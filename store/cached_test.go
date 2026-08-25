@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// countingStore est un faux Store qui compte ses appels et simule une latence.
+// countingStore is a fake Store that counts its calls and simulates latency.
 type countingStore struct {
 	calls int64
 }
 
 func (cs *countingStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Tenant, error) {
 	atomic.AddInt64(&cs.calls, 1)
-	time.Sleep(50 * time.Millisecond) // simule un aller-retour DB lent
+	time.Sleep(50 * time.Millisecond) // simulates a slow DB round-trip
 	return &tenant.Tenant{ID: id, State: tenant.Active}, nil
 }
 
@@ -32,7 +32,7 @@ func TestCachedStore_DeduplicatesConcurrentCalls(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// 20 goroutines demandent TOUTES le même tenant en même temps
+	// 20 goroutines ALL request the same tenant at the same time
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
@@ -44,7 +44,7 @@ func TestCachedStore_DeduplicatesConcurrentCalls(t *testing.T) {
 
 	wg.Wait()
 
-	// Then : la source ne doit avoir été appelée QU'UNE SEULE FOIS,
-	// pas 20 fois, malgré les 20 appels concurrents
+	// Then: the source must have been called ONLY ONCE,
+	// not 20 times, despite the 20 concurrent calls
 	assert.Equal(t, int64(1), atomic.LoadInt64(&source.calls))
 }

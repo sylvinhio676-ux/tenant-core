@@ -8,9 +8,9 @@ import (
 	"github.com/sylvinhio676-ux/tenant-core/tenantctx"
 )
 
-// Middleware retourne un middleware Echo qui résout le tenant et l'injecte
-// dans le contexte standard de la requête, accessible ensuite via
-// tenantctx.FromContext(...) dans les handlers Echo suivants.
+// Middleware returns an Echo middleware that resolves the tenant and injects
+// it into the request's standard context, accessible afterwards via
+// tenantctx.FromContext(...) in subsequent Echo handlers.
 func Middleware(m *tenant.Manager) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

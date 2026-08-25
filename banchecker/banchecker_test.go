@@ -10,14 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// fakeStore est un Store minimal pour tester LoadInitialBannedList
-// sans dépendre de MemoryStore ni d'une vraie base.
+// fakeStore is a minimal Store for testing LoadInitialBannedList
+// without depending on MemoryStore or a real database.
 type fakeStore struct {
 	bannedIDs map[tenant.TenantID]bool
 }
 
 func (fs *fakeStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Tenant, error) {
-	return nil, nil // non utilisé dans ces tests
+	return nil, nil // unused in these tests
 }
 
 func (fs *fakeStore) IsBanned(ctx context.Context, id tenant.TenantID) (bool, error) {
@@ -36,8 +36,8 @@ func TestBanChecker_HandlesEventDirectly(t *testing.T) {
 		Timestamp: time.Now(),
 	})
 
-	// Publish() est asynchrone (goroutines) : on laisse un court délai
-	// pour que le handler ait le temps de s'exécuter avant de vérifier.
+	// Publish() is asynchronous (goroutines): give it a short delay
+	// so the handler has time to run before checking.
 	time.Sleep(20 * time.Millisecond)
 
 	assert.True(t, bc.IsBanned("tenant-A"))
@@ -64,18 +64,18 @@ func TestBanChecker_StaleSnapshotNeverOverridesRecentEvent(t *testing.T) {
 	bus := eventbus.NewMemoryEventBus()
 	bc := New(bus)
 
-	// Given : un événement récent dit que le tenant N'EST PAS banni
+	// Given: a recent event says the tenant is NOT banned
 	recentTime := time.Now()
 	bc.apply("tenant-A", false, recentTime)
 	assert.False(t, bc.IsBanned("tenant-A"))
 
-	// When : un snapshot PÉRIMÉ (timestamp antérieur) arrive après,
-	// et affirme que le tenant EST banni
+	// When: a STALE snapshot (earlier timestamp) arrives afterwards,
+	// and claims the tenant IS banned
 	staleTime := recentTime.Add(-5 * time.Second)
 	bc.apply("tenant-A", true, staleTime)
 
-	// Then : l'information récente doit être préservée, le snapshot
-	// périmé doit être ignoré
+	// Then: the recent information must be preserved, the stale
+	// snapshot must be ignored
 	assert.False(t, bc.IsBanned("tenant-A"))
 }
 

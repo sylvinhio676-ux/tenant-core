@@ -7,10 +7,10 @@ import (
 	"github.com/sylvinhio676-ux/tenant-core/tenantctx"
 )
 
-// WithFakeTenant retourne un context.Context contenant un tenant fictif
-// minimal (sans rôles), pour tester du code applicatif qui appelle
-// tenantctx.FromContext(...) sans avoir besoin d'un vrai Resolver ni d'un
-// vrai Store.
+// WithFakeTenant returns a context.Context containing a minimal fake
+// tenant (no roles), to test application code that calls
+// tenantctx.FromContext(...) without needing a real Resolver or a
+// real Store.
 func WithFakeTenant(ctx context.Context, id tenant.TenantID, state tenant.State) context.Context {
 	return WithFakeTenantFull(ctx, &tenant.Tenant{
 		ID:    id,
@@ -18,9 +18,9 @@ func WithFakeTenant(ctx context.Context, id tenant.TenantID, state tenant.State)
 	})
 }
 
-// WithFakeTenantFull retourne un context.Context contenant le tenant donné
-// tel quel, pour les scénarios de test nécessitant plus de contrôle (ex:
-// rôles RBAC).
+// WithFakeTenantFull returns a context.Context containing the given
+// tenant as-is, for test scenarios requiring more control (e.g.
+// RBAC roles).
 func WithFakeTenantFull(ctx context.Context, t *tenant.Tenant) context.Context {
 	return tenantctx.WithTenant(ctx, t)
 }

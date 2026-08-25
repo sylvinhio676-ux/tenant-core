@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeResolver simule le Resolver.
+// fakeResolver simulates the Resolver.
 type fakeResolver struct {
 	id  tenant.TenantID
 	err error
@@ -23,7 +23,7 @@ func (f *fakeResolver) Resolve(r *http.Request) (tenant.TenantID, error) {
 	return f.id, f.err
 }
 
-// fakeStore simule le Store.
+// fakeStore simulates the Store.
 type fakeStore struct {
 	tenant *tenant.Tenant
 	err    error
@@ -67,8 +67,8 @@ func TestMiddleware_InjectsTenantIntoContext(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 
-	// Handler final qui vérifie que le tenant est bien présent
-	// dans le contexte reçu.
+	// Final handler that verifies the tenant is indeed present
+	// in the received context.
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actualTenant := tenantctx.FromContext(r.Context())
 
@@ -81,10 +81,10 @@ func TestMiddleware_InjectsTenantIntoContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Construction du middleware Chi.
+	// Build the Chi middleware.
 	handler := Middleware(manager)(next)
 
-	// Exécution de la chaîne HTTP.
+	// Run the HTTP chain.
 	handler.ServeHTTP(recorder, req)
 
 	assert.Equal(t, http.StatusOK, recorder.Code)

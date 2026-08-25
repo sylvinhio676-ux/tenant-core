@@ -10,7 +10,7 @@ import (
 func TestRBAC_Can(t *testing.T) {
 	rbac := New()
 
-	// Given : un rôle "admin" avec plusieurs permissions
+	// Given: an "admin" role with several permissions
 	rbac.DefineRole(
 		"tenant-A",
 		"admin",
@@ -25,33 +25,33 @@ func TestRBAC_Can(t *testing.T) {
 		Roles: []string{"admin"},
 	}
 
-	// Then : le tenant possède la permission
+	// Then: the tenant has the permission
 	assert.True(t, rbac.Can(tenantA, "users:write"))
 
-	// And : le tenant ne possède pas une permission inexistante
+	// And: the tenant does not have a permission that doesn't exist
 	assert.False(t, rbac.Can(tenantA, "users:delete"))
 }
 
 func TestRBAC_UnknownTenantOrRole(t *testing.T) {
 	rbac := New()
 
-	// Tenant-A possède le rôle admin
+	// Tenant-A has the admin role
 	rbac.DefineRole(
 		"tenant-A",
 		"admin",
 		[]string{"users:read"},
 	)
 
-	// Tenant-B n'a aucune définition RBAC
+	// Tenant-B has no RBAC definitions
 	tenantB := &tenant.Tenant{
 		ID:    "tenant-B",
 		Roles: []string{"admin"},
 	}
 
-	// Le tenant n'existe pas dans les définitions
+	// The tenant does not exist in the definitions
 	assert.False(t, rbac.Can(tenantB, "users:read"))
 
-	// Tenant-A possède un rôle qui n'existe pas
+	// Tenant-A has a role that doesn't exist
 	tenantA := &tenant.Tenant{
 		ID:    "tenant-A",
 		Roles: []string{"viewer"},

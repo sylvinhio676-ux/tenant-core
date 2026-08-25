@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeAdminStore simule tenant.AdminStore pour tester Service isolément.
+// fakeAdminStore simulates tenant.AdminStore to test Service in isolation.
 type fakeAdminStore struct {
 	tenantID    tenant.TenantID
 	state       tenant.State
@@ -21,11 +21,11 @@ type fakeAdminStore struct {
 }
 
 func (f *fakeAdminStore) Create(ctx context.Context, t *tenant.Tenant) error {
-	return nil // non utilisé dans ces tests
+	return nil // unused in these tests
 }
 
 func (f *fakeAdminStore) Update(ctx context.Context, t *tenant.Tenant) error {
-	return nil // non utilisé dans ces tests
+	return nil // unused in these tests
 }
 
 func (f *fakeAdminStore) SetState(ctx context.Context, id tenant.TenantID, state tenant.State) error {
@@ -42,7 +42,7 @@ func TestService_Ban_UpdatesStateAndPublishesEvent(t *testing.T) {
 	bus := eventbus.NewMemoryEventBus()
 	service := NewAdminService(store, bus)
 
-	// Le MemoryEventBus appelle les handlers de manière asynchrone.
+	// MemoryEventBus calls handlers asynchronously.
 	events := make(chan eventbus.TenantEvent, 1)
 	err := bus.Subscribe(func(event eventbus.TenantEvent) {
 		events <- event
@@ -53,11 +53,11 @@ func TestService_Ban_UpdatesStateAndPublishesEvent(t *testing.T) {
 	err = service.Ban(context.Background(), tenantID)
 	require.NoError(t, err)
 
-	// Vérifie que l'état a bien été modifié dans le Store.
+	// Verify that the state was indeed changed in the Store.
 	assert.Equal(t, tenantID, store.tenantID)
 	assert.Equal(t, tenant.Banned, store.state)
 
-	// Attend l'événement publié.
+	// Wait for the published event.
 	select {
 	case event := <-events:
 		assert.Equal(t, tenantID, event.TenantID)
@@ -83,15 +83,15 @@ func TestService_Ban_DoesNotPublishWhenStoreFails(t *testing.T) {
 	tenantID := tenant.TenantID("tenant-A")
 	err = service.Ban(context.Background(), tenantID)
 
-	// L'erreur du Store doit remonter jusqu'à l'appelant.
+	// The Store's error must propagate up to the caller.
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storeErr)
 
-	// Puisque SetState a échoué, Publish ne doit jamais être appelé.
+	// Since SetState failed, Publish must never be called.
 	select {
 	case event := <-events:
 		t.Fatalf("unexpected event published: tenant=%s state=%s", event.TenantID, event.State)
 	case <-time.After(100 * time.Millisecond):
-		// Aucun événement : comportement attendu.
+		// No event: expected behavior.
 	}
 }

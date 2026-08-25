@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeResolver simule le Resolver.
+// fakeResolver simulates the Resolver.
 type fakeResolver struct {
 	id  tenant.TenantID
 	err error
@@ -24,7 +24,7 @@ func (f *fakeResolver) Resolve(r *http.Request) (tenant.TenantID, error) {
 	return f.id, f.err
 }
 
-// fakeStore simule le Store.
+// fakeStore simulates the Store.
 type fakeStore struct {
 	tenant *tenant.Tenant
 	err    error
@@ -57,8 +57,8 @@ func TestMiddleware_InjectsTenantIntoContext(t *testing.T) {
 	middleware := Middleware(manager)
 	middleware(c)
 
-	// Le middleware doit avoir remplacé le contexte de la requête
-	// par celui contenant le tenant.
+	// The middleware must have replaced the request's context
+	// with the one containing the tenant.
 	actualTenant := tenantctx.FromContext(c.Request.Context())
 	require.NotNil(t, actualTenant)
 	assert.Equal(t, expectedTenant.ID, actualTenant.ID)

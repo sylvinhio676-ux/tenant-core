@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	// 1. Store — source de vérité en mémoire pour cette démonstration.
+	// 1. Store — in-memory source of truth for this demonstration.
 	memStore := store.NewMemoryStore()
 
 	memStore.Create(context.Background(), &tenant.Tenant{
@@ -33,22 +33,22 @@ func main() {
 
 	cachedStore := store.NewCachedStore(memStore, 10*time.Second)
 
-	// 2. Resolver — identifie le tenant depuis le sous-domaine.
-	//    Ex: acme.localhost:8080 → TenantID("acme")
+	// 2. Resolver — identifies the tenant from the subdomain.
+	//    E.g. acme.localhost:8080 → TenantID("acme")
 	subdomainResolver := resolver.NewSubdomainResolver("localhost")
 
-	// 3. Manager — assemble Resolver + Store.
+	// 3. Manager — assembles Resolver + Store.
 	manager := tenant.New(
 		tenant.WithResolver(subdomainResolver),
 		tenant.WithStore(cachedStore),
 	)
 
-	// 4. RBAC — démonstration de permissions différenciées par tenant.
+	// 4. RBAC — demonstration of permissions that differ per tenant.
 	authz := rbac.New()
 	authz.DefineRole("acme", "admin", []string{"users:read", "users:write"})
 	authz.DefineRole("globex", "viewer", []string{"users:read"})
 
-	// 5. Routes applicatives.
+	// 5. Application routes.
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +82,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "user list would go here"})
 	})
 
-	// 6. Middleware — injecte le tenant résolu dans le contexte de chaque
-	//    requête, via l'adaptateur net/http (notre adaptateur de référence).
+	// 6. Middleware — injects the resolved tenant into the context of each
+	//    request, via the net/http adapter (our reference adapter).
 	handler := nethttp.Wrap(manager, mux)
 
 	log.Println("listening on :8080")

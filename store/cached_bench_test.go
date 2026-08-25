@@ -11,8 +11,8 @@ import (
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 )
 
-// benchStore est un Store minimal pour les benchmarks : pas de latence
-// artificielle, juste de quoi satisfaire l'interface.
+// benchStore is a minimal Store for benchmarks: no artificial latency,
+// just enough to satisfy the interface.
 type benchStore struct{}
 
 func (bs *benchStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Tenant, error) {
@@ -30,9 +30,9 @@ func BenchmarkCachedStore_CacheHit(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_tenants", count), func(b *testing.B) {
 			cs := NewCachedStore(&benchStore{}, 10*time.Second)
 
-			// Préparation : on remplit le cache pour tous les tenants
-			// AVANT de démarrer la mesure (b.ResetTimer exclut cette
-			// préparation du chronométrage).
+			// Setup: fill the cache for all tenants
+			// BEFORE starting the measurement (b.ResetTimer excludes this
+			// setup from the timing).
 			ids := make([]tenant.TenantID, count)
 			for i := 0; i < count; i++ {
 				ids[i] = tenant.TenantID(fmt.Sprintf("tenant-%d", i))
@@ -52,9 +52,9 @@ func BenchmarkCachedStore_CacheHit(b *testing.B) {
 func BenchmarkCachedStore_CacheMiss(b *testing.B) {
 	cs := NewCachedStore(&benchStore{}, 10*time.Second)
 
-	// IDs uniques pré-générés, jamais présents dans le cache — garantit
-	// un miss à chaque itération, sans polluer la mesure avec le coût
-	// de fmt.Sprintf.
+	// Unique pre-generated IDs, never present in the cache — guarantees
+	// a miss on every iteration, without polluting the measurement with
+	// the cost of fmt.Sprintf.
 	ids := make([]tenant.TenantID, b.N)
 	for i := 0; i < b.N; i++ {
 		ids[i] = tenant.TenantID(fmt.Sprintf("tenant-%d", i))
@@ -84,8 +84,8 @@ func BenchmarkCachedStore_ConcurrentMiss_SameTenant(b *testing.B) {
 	b.ReportMetric(float64(source.calls.Load()), "source_calls")
 }
 
-// countingBenchStore compte ses appels réels, pour vérifier que
-// singleflight déduplique bien les accès concurrents.
+// countingBenchStore counts its real calls, to verify that
+// singleflight properly deduplicates concurrent access.
 type countingBenchStore struct {
 	calls atomic.Int64
 }
@@ -99,9 +99,9 @@ func (cs *countingBenchStore) IsBanned(ctx context.Context, id tenant.TenantID) 
 	return false, nil
 }
 
-// slowBenchStore simule une latence réelle (ex: DB), pour créer
-// volontairement une fenêtre de contention où plusieurs goroutines
-// arrivent AVANT que le premier appel n'ait eu le temps de terminer.
+// slowBenchStore simulates real latency (e.g. a DB), to deliberately
+// create a contention window where several goroutines arrive BEFORE
+// the first call has had time to complete.
 type slowBenchStore struct {
 	calls atomic.Int64
 	delay time.Duration

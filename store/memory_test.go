@@ -13,14 +13,14 @@ import (
 func TestMemoryStore_GetAndSet(t *testing.T) {
 	ms := NewMemoryStore()
 
-	// Given : un tenant inexistant
+	// Given: a tenant that doesn't exist
 	_, err := ms.Get(context.Background(), "tenant-A")
 	assert.ErrorIs(t, err, ErrTenantNotFound)
 
-	// When : on l'ajoute
+	// When: it is added
 	ms.set(&tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 
-	// Then : on doit le retrouver
+	// Then: it must be found
 	got, err := ms.Get(context.Background(), "tenant-A")
 	assert.NoError(t, err)
 	assert.Equal(t, tenant.TenantID("tenant-A"), got.ID)
@@ -63,13 +63,13 @@ func TestMemoryStore_GetReturnsCopyNotInternalPointer(t *testing.T) {
 	ms := NewMemoryStore()
 	ms.set(&tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 
-	// On récupère le tenant et on modifie la copie reçue
+	// Retrieve the tenant and mutate the received copy
 	got, err := ms.Get(context.Background(), "tenant-A")
 	assert.NoError(t, err)
 	got.State = tenant.Banned
 
-	// Then : un second Get() ne doit PAS refléter cette modification —
-	// preuve que Get() a bien retourné une copie, pas le pointeur interne
+	// Then: a second Get() must NOT reflect this change —
+	// proof that Get() did return a copy, not the internal pointer
 	second, err := ms.Get(context.Background(), "tenant-A")
 	assert.NoError(t, err)
 	assert.Equal(t, tenant.Active, second.State)
@@ -81,7 +81,7 @@ func TestMemoryStore_Create(t *testing.T) {
 	err := ms.Create(context.Background(), &tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 	assert.NoError(t, err)
 
-	// Créer le même ID une deuxième fois doit échouer
+	// Creating the same ID a second time must fail
 	err = ms.Create(context.Background(), &tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 	assert.ErrorIs(t, err, ErrTenantAlreadyExists)
 }
@@ -89,7 +89,7 @@ func TestMemoryStore_Create(t *testing.T) {
 func TestMemoryStore_Update(t *testing.T) {
 	ms := NewMemoryStore()
 
-	// Mettre à jour un tenant inexistant doit échouer
+	// Updating a tenant that doesn't exist must fail
 	err := ms.Update(context.Background(), &tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 	assert.ErrorIs(t, err, ErrTenantNotFound)
 
@@ -107,7 +107,7 @@ func TestMemoryStore_Update(t *testing.T) {
 func TestMemoryStore_SetState(t *testing.T) {
 	ms := NewMemoryStore()
 
-	// Modifier l'état d'un tenant inexistant doit échouer
+	// Changing the state of a tenant that doesn't exist must fail
 	err := ms.SetState(context.Background(), "tenant-A", tenant.Banned)
 	assert.ErrorIs(t, err, ErrTenantNotFound)
 
@@ -127,7 +127,7 @@ func TestMemoryStore_SetState_ConcurrentWithGet(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// 100 lectures et 100 écritures d'état concurrentes sur le même tenant
+	// 100 concurrent reads and 100 concurrent state writes on the same tenant
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -143,6 +143,6 @@ func TestMemoryStore_SetState_ConcurrentWithGet(t *testing.T) {
 	}
 
 	wg.Wait()
-	// Ce test sert surtout à être lancé sous -race : s'il n'y a pas de
-	// data race, il n'y a rien de plus à vérifier explicitement ici.
+	// This test mainly exists to be run with -race: if there is no
+	// data race, there's nothing else to explicitly verify here.
 }

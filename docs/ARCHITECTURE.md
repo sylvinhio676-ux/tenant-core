@@ -1,83 +1,83 @@
-# tenant-core — Architecture et documentation technique complète
+# tenant-core — Architecture and complete technical documentation
 
-> Toolkit Go de multi-tenancy natif : résolution, isolation de contexte, cache, bannissement temps réel, rate-limiting, RBAC, métriques, Admin API et propagation multi-instance — distribué comme librairie middleware compatible avec les routers Go existants.
-
----
-
-## Table des matières
-
-1. [Présentation générale](#1-présentation-générale)
-2. [Principes fondamentaux](#2-principes-fondamentaux)
-3. [Vue d'ensemble de l'architecture](#3-vue-densemble-de-larchitecture)
-4. [Étape 1 — Fondations](#4-étape-1--fondations)
-5. [Étape 2 — Store et cache](#5-étape-2--store-et-cache)
-6. [Étape 3 — Ban temps réel](#6-étape-3--ban-temps-réel)
-7. [Étape 4 — RateLimiter et CacheKeyer](#7-étape-4--ratelimiter-et-cachekeyer)
-8. [Étape 5 — RBAC et Metrics](#8-étape-5--rbac-et-metrics)
-9. [Étape 6 — Framework adapters](#9-étape-6--framework-adapters)
-10. [Étape 7 — Admin API et EventBus Redis](#10-étape-7--admin-api-et-eventbus-redis)
-11. [Étape 8 — Helpers de test (tenanttest)](#11-étape-8--helpers-de-test-tenanttest)
-12. [Architecture complète finale](#12-architecture-complète-finale)
-13. [Flux de données](#13-flux-de-données)
-14. [Concurrence et thread-safety](#14-concurrence-et-thread-safety)
-15. [Testabilité](#15-testabilité)
-16. [Limites et évolutions futures](#16-limites-et-évolutions-futures)
-17. [Arbre des packages](#17-arbre-des-packages)
-18. [Décisions / points à clarifier](#18-décisions--points-à-clarifier)
+> Native Go multi-tenancy toolkit: resolution, context isolation, cache, real-time ban propagation, rate limiting, RBAC, metrics, Admin API, and multi-instance propagation — distributed as a middleware library compatible with existing Go routers.
 
 ---
 
-## 1. Présentation générale
+## Table of contents
 
-### Objectif de tenant-core
+1. [Overview](#1-overview)
+2. [Core principles](#2-core-principles)
+3. [Architecture overview](#3-architecture-overview)
+4. [Step 1 — Foundations](#4-step-1--foundations)
+5. [Step 2 — Store and cache](#5-step-2--store-and-cache)
+6. [Step 3 — Real-time ban](#6-step-3--real-time-ban)
+7. [Step 4 — RateLimiter and CacheKeyer](#7-step-4--ratelimiter-and-cachekeyer)
+8. [Step 5 — RBAC and Metrics](#8-step-5--rbac-and-metrics)
+9. [Step 6 — Framework adapters](#9-step-6--framework-adapters)
+10. [Step 7 — Admin API and Redis EventBus](#10-step-7--admin-api-and-redis-eventbus)
+11. [Step 8 — Test helpers (tenanttest)](#11-step-8--test-helpers-tenanttest)
+12. [Final complete architecture](#12-final-complete-architecture)
+13. [Data flow](#13-data-flow)
+14. [Concurrency and thread-safety](#14-concurrency-and-thread-safety)
+15. [Testability](#15-testability)
+16. [Limitations and future evolutions](#16-limitations-and-future-evolutions)
+17. [Package tree](#17-package-tree)
+18. [Decisions / points to clarify](#18-decisions--points-to-clarify)
 
-`tenant-core` est un toolkit Go dont l'objectif est de résoudre un problème récurrent des applications SaaS multi-entreprises :
+---
 
-> Quand une requête arrive, l'application doit toujours savoir de quel tenant elle relève, et empêcher que le contexte d'un tenant soit mélangé avec celui d'un autre.
+## 1. Overview
+
+### Goal of tenant-core
+
+`tenant-core` is a Go toolkit whose goal is to solve a recurring problem in multi-company SaaS applications:
+
+> When a request comes in, the application must always know which tenant it belongs to, and prevent one tenant's context from ever being mixed up with another's.
 
 ```text
-                 TON APPLICATION
+                 YOUR APPLICATION
                        │
           ┌────────────┼────────────┐
           ▼            ▼            ▼
-       Entreprise A  Entreprise B  Entreprise C
+       Company A     Company B     Company C
           │            │            │
        Users A       Users B       Users C
        Data A        Data B        Data C
 ```
 
-### Problème résolu
+### Problem solved
 
-Sans toolkit dédié, chaque équipe réinvente sa propre gestion du multi-tenant : résolution du tenant depuis la requête, propagation manuelle (`handler(request, tenant)`, `service(request, tenant)`, `repository(request, tenant)`...), isolation du cache, quotas, permissions — avec le risque constant de fuite de données entre tenants.
+Without a dedicated toolkit, every team reinvents its own multi-tenant handling: resolving the tenant from the request, manually propagating it (`handler(request, tenant)`, `service(request, tenant)`, `repository(request, tenant)`...), isolating the cache, quotas, permissions — with the constant risk of data leaking between tenants.
 
-`tenant-core` répond à cela avec deux opérations fondamentales :
+`tenant-core` addresses this with two fundamental operations:
 
-1. **La résolution du tenant** — à partir d'une requête HTTP, déterminer à quel tenant elle appartient.
-2. **La propagation du contexte tenant** — transmettre cette information à toutes les couches de l'application sans paramètre explicite supplémentaire.
+1. **Tenant resolution** — from an HTTP request, determine which tenant it belongs to.
+2. **Tenant context propagation** — pass this information to every layer of the application without any extra explicit parameter.
 
 ```text
-GET https://entreprise-a.example.com/users
+GET https://company-a.example.com/users
 
-tenant-core doit comprendre :
+tenant-core must understand:
 
-Cette requête
+This request
      ↓
-appartient à
+belongs to
      ↓
 Tenant A
 
-Puis transmettre cette information :
+Then propagate this information:
 
 Request
    │
    ▼
 TenantResolver
    │
-   │ "C'est Tenant A"
+   │ "It's Tenant A"
    ▼
 ContextInjector
    │
-   │ contexte = Tenant A
+   │ context = Tenant A
    ▼
 Middleware
    │
@@ -85,20 +85,20 @@ Middleware
 Handler
 ```
 
-### Cas d'utilisation
+### Use cases
 
-- Une plateforme SaaS où chaque client (entreprise) doit voir ses propres données, sans jamais accéder à celles d'un autre.
-- Un système où le bannissement d'un tenant (fraude, abus) doit être appliqué immédiatement, sur toutes les instances du serveur.
-- Une application déployée derrière n'importe quel router Go (`net/http`, Gin, Echo, Chi) sans dupliquer la logique multi-tenant pour chacun.
-- Un besoin de quotas et de permissions différenciés par tenant, sans configuration globale rigide.
+- A SaaS platform where each client (company) must see only its own data, and never access another's.
+- A system where banning a tenant (fraud, abuse) must be applied immediately, across all server instances.
+- An application deployed behind any Go router (`net/http`, Gin, Echo, Chi) without duplicating the multi-tenant logic for each one.
+- A need for differentiated quotas and permissions per tenant, without a rigid global configuration.
 
-### Philosophie générale
+### General philosophy
 
-`tenant-core` ne cherche pas à réinventer un serveur HTTP, ni à imposer une stratégie d'isolation de données (tenant_id partagé, schéma séparé, base séparée). Il se positionne comme un toolkit qui traite le **tenant comme un citoyen de première classe** à chaque étage — résolution, cache, quotas, permissions, métriques — sans jamais imposer comment les données elles-mêmes sont isolées en base.
+`tenant-core` does not try to reinvent an HTTP server, nor impose a data isolation strategy (shared `tenant_id`, separate schema, separate database). It positions itself as a toolkit that treats the **tenant as a first-class citizen** at every layer — resolution, cache, quotas, permissions, metrics — without ever imposing how the data itself is isolated at the storage layer.
 
-### Pourquoi context.Context ?
+### Why context.Context?
 
-Plutôt que de faire voyager le tenant comme paramètre explicite à travers toute la pile applicative :
+Rather than making the tenant travel as an explicit parameter through the entire application stack:
 
 ```go
 handler(request, tenant)
@@ -106,7 +106,7 @@ service(request, tenant)
 repository(request, tenant)
 ```
 
-`tenant-core` s'appuie sur le `context.Context` standard de Go :
+`tenant-core` relies on Go's standard `context.Context`:
 
 ```text
 Request
@@ -119,27 +119,27 @@ context.Context
    └── cancellation
 ```
 
-Le tenant devient ainsi accessible à tout composant qui en a besoin, sans modifier la signature de chaque fonction intermédiaire.
+The tenant thus becomes accessible to any component that needs it, without changing the signature of every intermediate function.
 
 ---
 
-## 2. Principes fondamentaux
+## 2. Core principles
 
-Ces principes ont été appliqués de façon constante à travers les huit étapes de construction du toolkit.
+These principles were consistently applied across the toolkit's eight construction steps.
 
-### 2.1 Séparation des responsabilités
+### 2.1 Separation of concerns
 
-Chaque composant a une responsabilité unique et clairement délimitée. Le `Resolver` ne connaît pas le `Store` ; le `Store` ne connaît pas l'`EventBus` ; l'`EventBus` ne connaît pas ses consommateurs.
+Each component has a single, clearly delimited responsibility. The `Resolver` doesn't know about the `Store`; the `Store` doesn't know about the `EventBus`; the `EventBus` doesn't know about its consumers.
 
-### 2.2 Interfaces minimales
+### 2.2 Minimal interfaces
 
-> Une interface doit exposer uniquement ce dont son consommateur a réellement besoin.
+> An interface should only expose what its consumer actually needs.
 
-C'est le principe qui a motivé la séparation entre `tenant.Store` (lecture, consommé par `Manager`) et `tenant.AdminStore` (écriture, consommé par `admin.Service`) — plutôt qu'une seule interface `Store` gonflée avec `Create`, `Update`, `Ban`, `Disable`, etc.
+This is the principle that drove the separation between `tenant.Store` (read, consumed by `Manager`) and `tenant.AdminStore` (write, consumed by `admin.Service`) — rather than a single `Store` interface bloated with `Create`, `Update`, `Ban`, `Disable`, etc.
 
-### 2.3 Typage structurel de Go
+### 2.3 Go's structural typing
 
-Go ne requiert pas qu'un type déclare explicitement `implements InterfaceX`. Dès qu'un type possède les méthodes attendues par une interface, il la satisfait automatiquement :
+Go does not require a type to explicitly declare `implements InterfaceX`. As soon as a type has the methods an interface expects, it satisfies it automatically:
 
 ```text
              tenant.Store
@@ -147,19 +147,19 @@ Go ne requiert pas qu'un type déclare explicitement `implements InterfaceX`. D�
        ┌──────────┼───────────┐
        │          │           │
        ▼          ▼           ▼
- MemoryStore CachedStore  DBStore (futur)
+ MemoryStore CachedStore  DBStore (future)
 ```
 
-Ce mécanisme permet à `SubdomainResolver`, `MemoryStore`, `CachedStore`, `RedisEventBus`, `MemoryMetrics`, etc. de satisfaire les contrats définis dans le package `tenant` sans jamais avoir besoin d'importer ce package en sens inverse — évitant ainsi les dépendances circulaires.
+This mechanism lets `SubdomainResolver`, `MemoryStore`, `CachedStore`, `RedisEventBus`, `MemoryMetrics`, etc. satisfy the contracts defined in the `tenant` package without ever needing to import that package in reverse — avoiding circular dependencies.
 
-### 2.4 Agnosticisme
+### 2.4 Agnosticism
 
-Le cœur du toolkit ne dépend d'aucune technologie d'infrastructure particulière :
+The toolkit's core does not depend on any particular infrastructure technology:
 
-- ni d'un framework HTTP (Gin, Echo, Chi) ;
-- ni de Redis ;
-- ni de Prometheus ;
-- ni d'un moteur de base de données particulier.
+- not an HTTP framework (Gin, Echo, Chi);
+- not Redis;
+- not Prometheus;
+- not any particular database engine.
 
 ```text
              tenant
@@ -169,45 +169,45 @@ Le cœur du toolkit ne dépend d'aucune technologie d'infrastructure particuliè
    Interface       Interface
        │                │
        ▼                ▼
-Implémentation A   Implémentation B
+Implementation A   Implementation B
 ```
 
 ### 2.5 Fail-fast
 
-Une erreur de **configuration** du programme (composant obligatoire manquant, connexion Redis injoignable au démarrage) doit être détectée **immédiatement**, généralement via `panic` ou une erreur retournée au démarrage — plutôt que découverte silencieusement en production. Une erreur survenant pendant le **traitement d'une requête** est en revanche toujours gérée via le mécanisme standard `error`.
+A **program configuration** error (a required component missing, an unreachable Redis connection at startup) must be caught **immediately**, generally via a `panic` or an error returned at startup — rather than discovered silently in production. An error occurring during **request processing**, on the other hand, is always handled via the standard `error` mechanism.
 
-### 2.6 Testabilité
+### 2.6 Testability
 
-Chaque composant est conçu pour être testable indépendamment, sans dépendance à une infrastructure réelle (base de données, Redis, framework HTTP complet). Le package `tenanttest` prolonge ce principe pour les utilisateurs externes du toolkit.
+Each component is designed to be tested independently, with no dependency on real infrastructure (database, Redis, a full HTTP framework). The `tenanttest` package extends this principle for external users of the toolkit.
 
-### 2.7 Isolation multi-tenant
+### 2.7 Multi-tenant isolation
 
-> Toute ressource partagée doit être explicitement dimensionnée par `TenantID`.
+> Any shared resource must be explicitly scoped by `TenantID`.
 
-Ce principe est appliqué de façon transversale : au stockage (`TenantID → Tenant`), au cache (`TenantID → Cache Key`), au rate limiting (`TenantID → Rate Limit Bucket`), aux permissions (`TenantID → Roles → Permissions`).
+This principle applies transversally: to storage (`TenantID → Tenant`), to the cache (`TenantID → Cache Key`), to rate limiting (`TenantID → Rate Limit Bucket`), to permissions (`TenantID → Roles → Permissions`).
 
-### 2.8 Concurrence sûre
+### 2.8 Safe concurrency
 
-Le toolkit est destiné à des applications HTTP qui traitent naturellement des requêtes concurrentes. Chaque composant à état partagé est protégé par le mécanisme de synchronisation adapté à son profil d'accès (voir [section 14](#14-concurrence-et-thread-safety)).
+The toolkit is meant for HTTP applications that naturally handle concurrent requests. Every component with shared state is protected by the synchronization mechanism suited to its access profile (see [section 14](#14-concurrency-and-thread-safety)).
 
-### 2.9 Observabilité
+### 2.9 Observability
 
-Le toolkit permet de mesurer son propre comportement (requêtes, erreurs, latence, refus RBAC, refus de rate limit) sans imposer un backend de métriques particulier.
+The toolkit allows measuring its own behavior (requests, errors, latency, RBAC denials, rate-limit denials) without imposing a particular metrics backend.
 
-### 2.10 Séparation métier / transport
+### 2.10 Separation of business logic and transport
 
-La logique métier (`Manager`, `admin.Service`, `RBAC`) ne connaît jamais le protocole de transport qui l'invoque (HTTP, CLI, gRPC futur, tests). C'est le rôle des adaptateurs de faire le pont.
+The business logic (`Manager`, `admin.Service`, `RBAC`) never knows which transport protocol invokes it (HTTP, CLI, future gRPC, tests). That is the role of the adapters, which bridge the two.
 
 ---
 
-## 3. Vue d'ensemble de l'architecture
+## 3. Architecture overview
 
-### Le principe central
+### The central principle
 
-> À partir d'une requête HTTP, identifier le tenant, récupérer son état, puis appliquer les différents mécanismes de protection et d'isolation.
+> From an HTTP request, identify the tenant, retrieve its state, then apply the various protection and isolation mechanisms.
 
 ```text
-                    REQUÊTE HTTP
+                    HTTP REQUEST
                          │
                          ▼
                ┌──────────────────┐
@@ -236,62 +236,62 @@ La logique métier (`Manager`, `admin.Service`, `RBAC`) ne connaît jamais le pr
                └────────┬─────────┘
                         │
                         ▼
-                   CONTEXTE
+                   CONTEXT
 ```
 
-### La séparation fondamentale des packages
+### The fundamental package separation
 
 ```text
 tenant
 │
-├── définit les contrats et le modèle métier (le "quoi")
+├── defines the contracts and business model (the "what")
 │
-├── tenantctx        → transport du tenant via context.Context
-├── resolver         → résolution concrète (le "comment")
-├── store            → persistance et cache
-├── eventbus         → propagation d'événements
-├── ratelimit        → quotas par tenant
-├── cachekey         → isolation des clés de cache
-├── rbac             → permissions par tenant
-├── metrics          → observabilité
-├── middleware       → adaptateurs de routers
+├── tenantctx        → carries the tenant via context.Context
+├── resolver         → concrete resolution (the "how")
+├── store            → persistence and cache
+├── eventbus         → event propagation
+├── ratelimit        → per-tenant quotas
+├── cachekey         → cache key isolation
+├── rbac             → per-tenant permissions
+├── metrics          → observability
+├── middleware       → router adapters
 │   ├── net/http
 │   ├── gin
 │   ├── echo
 │   └── chi
-├── admin            → administration des tenants
-├── eventbus/redis   → propagation multi-instance
-└── tenanttest       → outils de test
+├── admin            → tenant administration
+├── eventbus/redis   → multi-instance propagation
+└── tenanttest       → test tools
 ```
 
-> **Le package `tenant` définit le "quoi", les sous-packages définissent le "comment".**
+> **The `tenant` package defines the "what"; the sub-packages define the "how".**
 
-Cette organisation permet :
+This organization enables:
 
-- **un faible couplage** — chaque sous-package ne dépend que du contrat qu'il implémente, jamais des autres implémentations ;
-- **des interfaces minimales** — chaque composant n'expose que ce dont son consommateur a besoin ;
-- **l'agnosticisme vis-à-vis des frameworks** — le cœur ignore Gin, Echo, Chi, Redis, Prometheus ;
-- **la testabilité** — chaque contrat peut être satisfait par une implémentation factice (fake) en test ;
-- **l'extensibilité** — une nouvelle implémentation (`PostgresStore`, `RedisRateLimiter`, `PrometheusMetrics`) peut être ajoutée sans modifier le cœur ;
-- **le remplacement des implémentations** — passer de `MemoryEventBus` à `RedisEventBus` ne change aucun contrat, seulement l'adaptateur utilisé.
+- **low coupling** — each sub-package only depends on the contract it implements, never on other implementations;
+- **minimal interfaces** — each component only exposes what its consumer needs;
+- **framework agnosticism** — the core knows nothing of Gin, Echo, Chi, Redis, Prometheus;
+- **testability** — each contract can be satisfied by a fake implementation in tests;
+- **extensibility** — a new implementation (`PostgresStore`, `RedisRateLimiter`, `PrometheusMetrics`) can be added without modifying the core;
+- **swappable implementations** — moving from `MemoryEventBus` to `RedisEventBus` changes no contract, only the adapter used.
 
 ---
 
-## 4. Étape 1 — Fondations
+## 4. Step 1 — Foundations
 
-### 4.1 Objectif
+### 4.1 Goal
 
-Avant Redis, avant les middlewares Gin/Echo/Chi, avant l'Admin API ou le RBAC, il fallait répondre à une question fondamentale :
+Before Redis, before the Gin/Echo/Chi middlewares, before the Admin API or RBAC, a fundamental question needed answering:
 
-> Comment une requête HTTP est-elle associée à un tenant, et comment garantir que les données de ce tenant restent isolées ?
+> How is an HTTP request associated with a tenant, and how do we guarantee that tenant's data stays isolated?
 
 ```text
-                    Requête HTTP
+                    HTTP Request
                          │
                          ▼
                 ┌─────────────────┐
                 │    Resolver     │
-                │ "Quel tenant ?" │
+                │ "Which tenant?" │
                 └────────┬────────┘
                          │
                     TenantID
@@ -299,13 +299,13 @@ Avant Redis, avant les middlewares Gin/Echo/Chi, avant l'Admin API ou le RBAC, i
                          ▼
                 ┌─────────────────┐
                 │ Tenant Context  │
-                │ "Quel tenant    │
-                │ pour cette      │
-                │ requête ?"      │
+                │ "Which tenant   │
+                │ for this        │
+                │ request?"       │
                 └────────┬────────┘
                          │
                          ▼
-                  Handler métier
+                  Business handler
                          │
                          ▼
                  tenantctx.FromContext()
@@ -314,7 +314,7 @@ Avant Redis, avant les middlewares Gin/Echo/Chi, avant l'Admin API ou le RBAC, i
                     *Tenant
 ```
 
-### 4.2 Les types fondamentaux
+### 4.2 The fundamental types
 
 **`TenantID`**
 
@@ -322,7 +322,7 @@ Avant Redis, avant les middlewares Gin/Echo/Chi, avant l'Admin API ou le RBAC, i
 type TenantID string
 ```
 
-Un type nommé dédié plutôt qu'un simple `string`, pour exprimer l'intention et bénéficier de la sécurité du typage : `var id tenant.TenantID` est conceptuellement différent de `var email string`. Le compilateur refuse de confondre les deux, même si les deux sont "juste des strings" en interne.
+A dedicated named type rather than a plain `string`, to express intent and benefit from type safety: `var id tenant.TenantID` is conceptually different from `var email string`. The compiler refuses to mix up the two, even though both are "just strings" internally.
 
 **`State`**
 
@@ -336,11 +336,11 @@ const (
 )
 ```
 
-Les trois états ont une signification métier distincte :
+The three states have distinct business meanings:
 
-- **`Active`** — le tenant peut normalement accéder au système.
-- **`Disabled`** — le tenant est désactivé (ex: abonnement terminé). La désactivation peut être propagée avec un léger délai, notamment via un cache (cohérence *eventual*).
-- **`Banned`** — le tenant est banni pour fraude ou abus. Contrairement à `Disabled`, le bannissement doit être propagé **immédiatement** — ce qui justifie l'introduction ultérieure de `BanChecker` et de l'`EventBus` (Étape 3).
+- **`Active`** — the tenant can access the system normally.
+- **`Disabled`** — the tenant is disabled (e.g. subscription ended). Disabling can be propagated with a slight delay, notably via a cache (*eventual* consistency).
+- **`Banned`** — the tenant is banned for fraud or abuse. Unlike `Disabled`, a ban must be propagated **immediately** — which justifies the later introduction of `BanChecker` and the `EventBus` (Step 3).
 
 **`Tenant`**
 
@@ -359,11 +359,11 @@ Tenant
  └── Roles
 ```
 
-Le champ `Roles` a été prévu dès le départ pour permettre l'intégration ultérieure du RBAC (Étape 5).
+The `Roles` field was planned from the start to allow the later integration of RBAC (Step 5).
 
-### 4.3 Le contrat Resolver
+### 4.3 The Resolver contract
 
-Décision architecturale importante : le contrat est placé dans le package racine `tenant`, pas dans le package `resolver`.
+An important architectural decision: the contract lives in the root `tenant` package, not in the `resolver` package.
 
 ```go
 type Resolver interface {
@@ -371,23 +371,23 @@ type Resolver interface {
 }
 ```
 
-Cette interface répond à une seule question : *à quel tenant appartient cette requête HTTP ?* Elle ne dit rien sur **comment** le tenant est trouvé.
+This interface answers a single question: *which tenant does this HTTP request belong to?* It says nothing about **how** the tenant is found.
 
 ```text
 tenant
    │
-   └── définit le contrat
+   └── defines the contract
           │
           ▼
       Resolver
 
 resolver/
-   └── SubdomainResolver (implémentation)
+   └── SubdomainResolver (implementation)
 ```
 
 ### 4.4 SubdomainResolver
 
-Première implémentation concrète, basée sur le sous-domaine de la requête :
+The first concrete implementation, based on the request's subdomain:
 
 ```text
 tenant-a.example.com
@@ -406,7 +406,7 @@ https://school-a.example.com/users
               tenant-a
 ```
 
-### 4.5 Pourquoi SubdomainResolver n'est pas dans `tenant`
+### 4.5 Why SubdomainResolver is not in `tenant`
 
 ```text
 tenant
@@ -414,18 +414,18 @@ tenant
  └── Resolver
        ▲
        │
-       │ satisfait automatiquement
+       │ automatically satisfied by
        │
 resolver
  │
  └── SubdomainResolver
 ```
 
-Grâce au typage structurel de Go, `SubdomainResolver` n'a jamais besoin d'écrire `implements tenant.Resolver`. Il suffit qu'il possède la méthode `Resolve(*http.Request) (tenant.TenantID, error)`.
+Thanks to Go's structural typing, `SubdomainResolver` never needs to write `implements tenant.Resolver`. It just needs to have the method `Resolve(*http.Request) (tenant.TenantID, error)`.
 
-### 4.6 Le Context Injector — `tenantctx`
+### 4.6 The Context Injector — `tenantctx`
 
-Une fois le tenant identifié, il faut le transmettre aux couches suivantes. Le package `tenantctx/` gère le stockage du tenant dans le `context.Context` standard :
+Once the tenant is identified, it needs to be passed to the following layers. The `tenantctx/` package handles storing the tenant in the standard `context.Context`:
 
 ```go
 ctx := tenantctx.WithTenant(ctx, tenant)
@@ -440,17 +440,17 @@ context.Context
             └── Roles
 ```
 
-Le code métier récupère ensuite le tenant avec :
+Business code then retrieves the tenant with:
 
 ```go
 t := tenantctx.FromContext(ctx)
 ```
 
-Une fonction métier n'a donc besoin de connaître ni le sous-domaine, ni HTTP, ni Gin, ni Echo, ni Chi, ni Redis, ni la façon dont le tenant a été résolu — elle reçoit simplement un `context.Context`.
+A business function therefore doesn't need to know about the subdomain, HTTP, Gin, Echo, Chi, Redis, or how the tenant was resolved — it simply receives a `context.Context`.
 
-### 4.7 Pourquoi context.Context
+### 4.7 Why context.Context
 
-Le contexte permet de faire voyager l'identité du tenant à travers les couches, sans devoir ajouter `tenantID string` à toutes les signatures :
+The context lets the tenant's identity travel through the layers, without needing to add `tenantID string` to every signature:
 
 ```text
 HTTP
@@ -468,19 +468,19 @@ Repository
 Database
 ```
 
-### 4.8 Isolation entre tenants
+### 4.8 Isolation between tenants
 
-Il ne suffisait pas de réussir à identifier un tenant : il fallait garantir que le contexte d'une requête du tenant A ne peut jamais être accidentellement réutilisé pour le tenant B.
+It wasn't enough to be able to identify a tenant: it also had to be guaranteed that tenant A's request context could never accidentally be reused for tenant B.
 
 ```text
-Requête A
+Request A
 tenant-a.example.com
        │
        ▼
 Context A
 TenantID = tenant-a
 
-Requête B
+Request B
 tenant-b.example.com
        │
        ▼
@@ -488,33 +488,33 @@ Context B
 TenantID = tenant-b
 ```
 
-Les deux contextes doivent rester complètement indépendants.
+The two contexts must remain completely independent.
 
-### 4.9 Le test critique d'isolation
+### 4.9 The critical isolation test
 
-L'isolation a été considérée comme une propriété à tester **explicitement**, jamais simplement supposée.
+Isolation was treated as a property to be tested **explicitly**, never simply assumed.
 
 ```text
-Créer contexte A
+Create context A
       │
       ▼
-injecter tenant-A
+inject tenant-A
       │
       ▼
-Créer contexte B
+Create context B
       │
       ▼
-injecter tenant-B
+inject tenant-B
       │
       ▼
-vérifier A == tenant-A
-vérifier B == tenant-B
+verify A == tenant-A
+verify B == tenant-B
 ```
 
-L'objectif est notamment de détecter une mauvaise implémentation utilisant une variable globale au lieu du `context.Context` :
+The goal in particular is to detect a bad implementation that would use a global variable instead of `context.Context`:
 
 ```go
-var currentTenant *Tenant // ❌ dangereux
+var currentTenant *Tenant // ❌ dangerous
 ```
 
 ```text
@@ -533,21 +533,21 @@ globalTenant = B
 Goroutine A
      │
      ▼
-récupère B ❌
+gets B back ❌
 ```
 
-Le contexte standard, lui, est **immuable** — `WithTenant()` ne modifie jamais un contexte existant, il en crée un nouveau qui l'enveloppe. Deux contextes créés à partir de branches différentes ne peuvent jamais se marcher dessus. Ce mécanisme évite précisément ce type de partage implicite dangereux.
+The standard context, on the other hand, is **immutable** — `WithTenant()` never modifies an existing context, it creates a new one that wraps it. Two contexts created from different branches can never step on each other. This mechanism precisely avoids this kind of dangerous implicit sharing.
 
-**Deux tests concrets ont validé cette propriété** :
+**Two concrete tests validated this property**:
 
-- Un test **structurel** : injecter deux tenants dans deux contextes distincts, vérifier qu'ils restent bien différents, et que muter le tenant récupéré depuis un contexte n'affecte jamais l'autre contexte.
-- Un test **sous concurrence réelle** : une centaine de goroutines simulant des requêtes simultanées alternant entre deux tenants, exécuté systématiquement avec `go test -race`, pour garantir qu'aucune goroutine ne voit jamais le tenant d'une autre.
+- A **structural** test: inject two tenants into two separate contexts, verify they remain distinct, and that mutating the tenant retrieved from one context never affects the other context.
+- A test under **real concurrency**: a hundred goroutines simulating simultaneous requests alternating between two tenants, systematically run with `go test -race`, to guarantee that no goroutine ever sees another's tenant.
 
-### 4.10 La clé de contexte privée
+### 4.10 The private context key
 
-Un détail technique important : la clé utilisée par `context.WithValue` pour stocker le tenant n'est **jamais** une simple `string`. Une clé `string` comme `"tenant"` pourrait entrer en collision avec n'importe quelle autre bibliothèque tierce utilisant la même clé, avec un risque réel d'écrasement silencieux.
+An important technical detail: the key used by `context.WithValue` to store the tenant is **never** a plain `string`. A `string` key like `"tenant"` could collide with any other third-party library using the same key, with a real risk of silent overwriting.
 
-La solution retenue est un type de clé **privé, non exporté** :
+The solution chosen is a **private, unexported** key type:
 
 ```go
 type contextKey int
@@ -555,9 +555,9 @@ type contextKey int
 const tenantContextKey contextKey = 0
 ```
 
-Comme `contextKey` est un type non exporté, aucun autre package ne peut créer une valeur de ce type — même en connaissant son nom. Et même si un autre package définissait aussi un `type contextKey int` avec la valeur `0`, ce serait un type Go **différent** (les types sont comparés par identité complète package + nom), donc `context.WithValue` ne les confondrait jamais. C'est le pattern documenté officiellement par la stdlib Go elle-même.
+Since `contextKey` is an unexported type, no other package can create a value of that type — even knowing its name. And even if another package also defined a `type contextKey int` with the value `0`, it would be a **different** Go type (types are compared by full package + name identity), so `context.WithValue` would never confuse them. This is the pattern officially documented by the Go standard library itself.
 
-### 4.11 Architecture des packages après l'Étape 1
+### 4.11 Package architecture after Step 1
 
 ```text
 tenant-core/
@@ -569,46 +569,46 @@ tenant-core/
 │   └── Resolver
 │
 ├── tenantctx/
-│   └── contexte du tenant
+│   └── tenant context
 │
 └── resolver/
     └── SubdomainResolver
 ```
 
-| Package | Responsabilité |
+| Package | Responsibility |
 |---|---|
-| `tenant` | Concepts et contrats fondamentaux |
-| `tenantctx` | Transport du tenant via `context.Context` |
-| `resolver` | Résolution concrète du tenant |
-| `SubdomainResolver` | Identification depuis le sous-domaine |
+| `tenant` | Fundamental concepts and contracts |
+| `tenantctx` | Carries the tenant via `context.Context` |
+| `resolver` | Concrete tenant resolution |
+| `SubdomainResolver` | Identification from the subdomain |
 
-### 4.12 Le principe architectural établi dès l'Étape 1
+### 4.12 The architectural principle established as of Step 1
 
 ```text
-                CONTRATS
+                CONTRACTS
                    │
                    ▼
-               package tenant
+               tenant package
                    │
         ┌──────────┼──────────┐
         ▼          ▼          ▼
     resolver     store     eventbus
         │          │          │
         ▼          ▼          ▼
- implémentation implémentation implémentation
+ implementation implementation implementation
 ```
 
-Ce principe s'est retrouvé constamment dans toute la suite du toolkit : `tenant.Resolver` ← `SubdomainResolver`, `tenant.Store` ← `MemoryStore`/`CachedStore`, `eventbus.EventBus` ← `MemoryEventBus`/`RedisEventBus`.
+This principle recurred constantly throughout the rest of the toolkit: `tenant.Resolver` ← `SubdomainResolver`, `tenant.Store` ← `MemoryStore`/`CachedStore`, `eventbus.EventBus` ← `MemoryEventBus`/`RedisEventBus`.
 
-**Résumé de l'étape** : identifier → représenter → transporter → isoler le tenant. Cette base a permis de rester agnostique vis-à-vis des frameworks et de construire les adaptateurs Gin/Echo/Chi sans jamais modifier le cœur du système.
+**Step summary**: identify → represent → carry → isolate the tenant. This foundation made it possible to stay agnostic of frameworks and to build the Gin/Echo/Chi adapters without ever modifying the core of the system.
 
 ---
 
-## 5. Étape 2 — Store et cache
+## 5. Step 2 — Store and cache
 
-### 5.1 Objectif
+### 5.1 Goal
 
-L'Étape 1 répondait à *« quel tenant correspond à cette requête ? »*, mais uniquement avec son identifiant. Il fallait maintenant répondre à : *« quelles sont les informations de ce tenant et dans quel état se trouve-t-il ? »* — c'est le rôle du `Store`.
+Step 1 answered *"which tenant does this request correspond to?"*, but only with its identifier. Now the question was: *"what is this tenant's information, and what state is it in?"* — that is the `Store`'s role.
 
 ```text
                     HTTP Request
@@ -625,9 +625,9 @@ L'Étape 1 répondait à *« quel tenant correspond à cette requête ? »*, mai
                  │ CachedStore │
                  └──────┬──────┘
                         │
-                 cache hit ?
+                 cache hit?
                   /           \
-                oui            non
+                yes            no
                  │              │
                  │              ▼
                  │        ┌────────────┐
@@ -639,7 +639,7 @@ L'Étape 1 répondait à *« quel tenant correspond à cette requête ? »*, mai
                       *Tenant
 ```
 
-### 5.2 Le contrat `tenant.Store`
+### 5.2 The `tenant.Store` contract
 
 ```go
 type Store interface {
@@ -648,12 +648,12 @@ type Store interface {
 }
 ```
 
-- **`Get`** — récupère un tenant complet.
-- **`IsBanned`** — vérification spécialisée et rapide du bannissement, qui deviendra particulièrement importante avec le `BanChecker` (Étape 3).
+- **`Get`** — retrieves a full tenant.
+- **`IsBanned`** — a specialized, fast check for a ban, which becomes especially important with `BanChecker` (Step 3).
 
-Cette séparation est importante : le chemin normal de résolution n'a pas besoin de connaître les opérations d'administration (voir Étape 7, `AdminStore`).
+This separation matters: the normal resolution path has no need to know about administration operations (see Step 7, `AdminStore`).
 
-### 5.3 Pourquoi `Store` est une interface
+### 5.3 Why `Store` is an interface
 
 ```text
              tenant.Store
@@ -661,10 +661,10 @@ Cette séparation est importante : le chemin normal de résolution n'a pas besoi
        ┌──────────┼───────────┐
        │          │           │
        ▼          ▼           ▼
- MemoryStore CachedStore  DBStore (futur)
+ MemoryStore CachedStore  DBStore (future)
 ```
 
-Le cœur du toolkit doit pouvoir remplacer `MemoryStore` par `PostgreSQLStore`, `MySQLStore`, `RedisStore` ou `APIStore` sans jamais modifier `Manager`.
+The toolkit's core must be able to swap `MemoryStore` for `PostgreSQLStore`, `MySQLStore`, `RedisStore`, or `APIStore`, without ever modifying `Manager`.
 
 ### 5.4 MemoryStore
 
@@ -685,9 +685,9 @@ MemoryStore
     └── map[TenantID]*Tenant
 ```
 
-### 5.5 Pourquoi `sync.RWMutex`
+### 5.5 Why `sync.RWMutex`
 
-Le store est accédé simultanément par plusieurs goroutines HTTP :
+The store is accessed simultaneously by multiple HTTP goroutines:
 
 ```text
 Request A ──────┐
@@ -697,7 +697,7 @@ Request D ──────┤
 Request E ──────┘
 ```
 
-Une map Go classique n'est pas sûre pour des accès concurrents impliquant des écritures. `RWMutex` permet deux types de verrouillage :
+A plain Go map isn't safe for concurrent access involving writes. `RWMutex` allows two kinds of locking:
 
 ```text
 Reader A ── RLock ──►
@@ -716,11 +716,11 @@ Writer
 Unlock()
 ```
 
-Plusieurs lecteurs peuvent lire simultanément ; une écriture reste exclusive. Ce profil est particulièrement adapté à un `Store` où les lectures sont beaucoup plus fréquentes que les écritures.
+Several readers can read at the same time; a write remains exclusive. This profile fits a `Store` particularly well, since reads are far more frequent than writes.
 
-### 5.6 Le piège des pointeurs partagés
+### 5.6 The shared-pointer trap
 
-Une subtilité importante rencontrée pendant la conception : la map contient `map[TenantID]*Tenant`, donc des **pointeurs**, pas des copies.
+An important subtlety encountered during design: the map holds `map[TenantID]*Tenant`, i.e. **pointers**, not copies.
 
 ```text
 Map
@@ -732,7 +732,7 @@ Map
                     State
 ```
 
-Si `Get()` retourne directement `t` (le pointeur interne), l'appelant obtient un accès direct à l'objet réellement stocké dans le store. Faire `t.State = tenant.Disabled` hors verrou, pendant qu'une autre goroutine lit ce même champ via `Get()`, provoque une **data race** authentique — détectable par `go test -race`.
+If `Get()` returns `t` directly (the internal pointer), the caller gets direct access to the object actually stored in the store. Doing `t.State = tenant.Disabled` outside the lock, while another goroutine reads that same field via `Get()`, causes a genuine **data race** — detectable by `go test -race`.
 
 ```text
 Goroutine A                 Goroutine B
@@ -742,28 +742,28 @@ t.State = Banned
        │                 Get()
        │                   │
        ▼                   ▼
-   écriture              lecture
+   write                 read
 ```
 
-> **Protéger uniquement la map ne suffit pas lorsque les valeurs de la map sont des pointeurs mutables.**
+> **Protecting only the map is not enough when the map's values are mutable pointers.**
 
-**La solution retenue** :
+**The solution adopted**:
 
-- **`Get()` retourne toujours une copie**, jamais le pointeur interne. Le consommateur externe ne peut donc jamais muter l'état interne du store via le pointeur reçu.
-- Les opérations d'écriture (`SetState`, `Create`, `Update`) modifient l'objet interne **directement, sous verrou exclusif (`Lock`)** — jamais via un aller-retour `Get()` + modification + réécriture, qui recréerait une fenêtre de *lost update* entre deux étapes séparées.
+- **`Get()` always returns a copy**, never the internal pointer. The external consumer can therefore never mutate the store's internal state via the pointer it received.
+- Write operations (`SetState`, `Create`, `Update`) modify the internal object **directly, under an exclusive lock (`Lock`)** — never via a Get + modify + write-back round trip, which would recreate a *lost update* window.
 
 ```text
 MemoryStore
     │
     ▼
-*Tenant interne
+internal *Tenant
     │
-    │ copie
+    │ copy
     ▼
-*Tenant retourné
+returned *Tenant
 ```
 
-Une **primitive interne d'écriture** (`set`, non exportée) reste utilisée en interne par `Create`/`Update`/`SetState`, mais n'est jamais exposée publiquement — le contrat public d'écriture passe exclusivement par ces trois méthodes explicites, jamais par une écriture brute.
+An **internal write primitive** (`set`, unexported) is still used internally by `Create`/`Update`/`SetState`, but is never exposed publicly — the public write contract goes exclusively through these three explicit methods, never through a raw write.
 
 ### 5.7 `Get()`
 
@@ -773,14 +773,14 @@ TenantID
    ▼
 MemoryStore
    │
-   ├── chercher le tenant
+   ├── look up the tenant
    │
-   ├── vérifier l'existence
+   ├── check it exists
    │
-   └── retourner le tenant (copie)
+   └── return the tenant (copy)
 ```
 
-Si le tenant n'existe pas, une erreur sentinelle explicite est retournée : `ErrTenantNotFound`. Cela permet aux couches supérieures de distinguer un tenant réellement inexistant d'une erreur technique quelconque.
+If the tenant doesn't exist, an explicit sentinel error is returned: `ErrTenantNotFound`. This lets upper layers distinguish a tenant that genuinely doesn't exist from some other technical error.
 
 ### 5.8 `IsBanned()`
 
@@ -791,18 +791,18 @@ TenantID
 Store
    │
    ▼
-State == Banned ?
+State == Banned?
    │
-   ├── oui → true
-   └── non → false
+   ├── yes → true
+   └── no → false
 ```
 
-### 5.9 Modification d'état — `Disable()` / `SetState()`
+### 5.9 State change — `Disable()` / `SetState()`
 
-Un tenant peut passer d'`Active` à `Disabled` (par exemple, fin d'abonnement) :
+A tenant can move from `Active` to `Disabled` (e.g. end of subscription):
 
 ```text
-abonnement terminé
+subscription ended
        │
        ▼
 Disable()
@@ -811,7 +811,7 @@ Disable()
 State = Disabled
 ```
 
-Cette modification est protégée par le même mécanisme de synchronisation que les autres écritures :
+This change is protected by the same synchronization mechanism as other writes:
 
 ```text
 Disable()
@@ -820,15 +820,15 @@ Disable()
 Lock()
    │
    ▼
-modifier tenant
+modify tenant
    │
    ▼
 Unlock()
 ```
 
-### 5.10 Pourquoi un TTL est nécessaire
+### 5.10 Why a TTL is needed
 
-Une base de données distante peut être beaucoup plus lente qu'une lecture en mémoire. Sans cache :
+A remote database can be much slower than an in-memory read. Without a cache:
 
 ```text
 Request
@@ -843,7 +843,7 @@ Database
 Tenant
 ```
 
-Si des milliers de requêtes demandent continuellement le même tenant, cela devient coûteux. D'où l'introduction d'un cache devant le store.
+If thousands of requests continually ask for the same tenant, this becomes expensive. Hence the introduction of a cache in front of the store.
 
 ### 5.11 CachedStore
 
@@ -853,7 +853,7 @@ store/
 └── cached.go
 ```
 
-`CachedStore` n'est pas un remplacement de `Store` : il l'**enveloppe**.
+`CachedStore` is not a replacement for `Store`: it **wraps** it.
 
 ```text
 CachedStore
@@ -864,9 +864,9 @@ CachedStore
         MemoryStore
 ```
 
-Le champ `source` est basé sur l'**interface** `tenant.Store`, jamais sur une implémentation concrète — décision importante : le cache ne dépend d'aucune implémentation particulière, ce qui lui permet d'envelopper n'importe quel futur `Store` (Postgres, Redis, etc.) sans modification.
+The `source` field is based on the `tenant.Store` **interface**, never on a concrete implementation — an important decision: the cache doesn't depend on any particular implementation, letting it wrap any future `Store` (Postgres, Redis, etc.) with no modification.
 
-### 5.12 Fonctionnement du cache
+### 5.12 How the cache works
 
 **Cache HIT**
 
@@ -874,10 +874,10 @@ Le champ `source` est basé sur l'**interface** `tenant.Store`, jamais sur une i
 Get("tenant-a")
        │
        ▼
-   Cache trouvé
+   Cache found
        │
        ▼
-   encore valide ?
+   still valid?
        │
        ▼
      Tenant
@@ -889,7 +889,7 @@ Get("tenant-a")
 Get("tenant-a")
        │
        ▼
-   Cache absent/expiré
+   Cache absent/expired
        │
        ▼
  source.Get(...)
@@ -898,15 +898,15 @@ Get("tenant-a")
     Tenant
        │
        ▼
- mise en cache
+ store in cache
        │
        ▼
-    retour
+    return
 ```
 
-### 5.13 Le TTL
+### 5.13 The TTL
 
-Chaque entrée du cache possède une durée de validité (par exemple 30 secondes). Après expiration, l'entrée est considérée invalide et le store sous-jacent est de nouveau interrogé.
+Each cache entry has a validity duration (e.g. 30 seconds). After expiration, the entry is considered invalid and the underlying store is queried again.
 
 ```text
 Cache
@@ -918,22 +918,22 @@ Cache
 source.Get()
 ```
 
-### 5.14 Pourquoi accepter une légère incohérence pour `Disabled`
+### 5.14 Why accepting slight inconsistency is fine for `Disabled`
 
-Le TTL est particulièrement adapté à l'état `Disabled` : pendant la fenêtre de validité du cache, une instance peut encore considérer un tenant désactivé comme actif. C'est une incohérence temporaire **acceptée**.
+The TTL is particularly well suited to the `Disabled` state: during the cache's validity window, an instance might still consider a disabled tenant active. This is a **accepted** temporary inconsistency.
 
 ```text
-Disabled  → propagation eventual (TTL acceptable)
-Banned    → propagation immédiate (nécessite un événement — Étape 3)
+Disabled  → eventual propagation (TTL acceptable)
+Banned    → immediate propagation (requires an event — Step 3)
 ```
 
-Cette distinction se retrouve dans la propriété du `MemoryStore.IsBanned()` : contrairement au `Get()` classique, `IsBanned` (et plus tard, dans `CachedStore`, son équivalent) contourne systématiquement le cache pour interroger directement la source de vérité.
+This distinction shows up in the property of `MemoryStore.IsBanned()`: unlike a regular `Get()`, `IsBanned` (and later, in `CachedStore`, its equivalent) systematically bypasses the cache to query the source of truth directly.
 
-### 5.15 Protection contre les appels dupliqués — `singleflight`
+### 5.15 Protection against duplicate calls — `singleflight`
 
-Un problème d'efficacité (pas de sécurité) subsiste malgré le `RWMutex` : si 500 requêtes concurrentes du même tenant arrivent au moment exact d'un cache miss, elles peuvent toutes constater simultanément l'absence de l'entrée avant qu'aucune n'ait eu le temps de la remplir — provoquant 500 appels dupliqués vers la source de vérité (phénomène connu sous le nom de *cache stampede* ou *thundering herd*).
+An efficiency problem (not a safety one) remains despite the `RWMutex`: if 500 concurrent requests for the same tenant arrive at the exact moment of a cache miss, they can all simultaneously observe the entry's absence before any of them has had time to fill it — causing 500 duplicate calls to the source of truth (a phenomenon known as *cache stampede* or *thundering herd*).
 
-La solution retenue est `golang.org/x/sync/singleflight`, qui garantit qu'un seul appel réel part vers la source pour une clé donnée, les appelants concurrents attendant et recevant le même résultat :
+The solution adopted is `golang.org/x/sync/singleflight`, which guarantees that only one real call goes out to the source for a given key, with concurrent callers waiting and receiving the same result:
 
 ```go
 v, err, _ := cs.group.Do(string(id), func() (interface{}, error) {
@@ -943,7 +943,7 @@ v, err, _ := cs.group.Do(string(id), func() (interface{}, error) {
 })
 ```
 
-### 5.16 Architecture complète de l'Étape 2
+### 5.16 Complete architecture of Step 2
 
 ```text
 tenant-core/
@@ -975,7 +975,7 @@ tenant-core/
                            tenant.Store
 ```
 
-Configuration typique :
+Typical configuration:
 
 ```text
                  Manager
@@ -987,31 +987,31 @@ Configuration typique :
               MemoryStore
 ```
 
-### 5.17 Résumé de l'Étape 2
+### 5.17 Step 2 summary
 
-| Élément | Responsabilité |
+| Element | Responsibility |
 |---|---|
-| `tenant.Store` | Contrat de lecture des tenants |
-| `MemoryStore` | Stockage en mémoire |
-| `RWMutex` | Protection des accès concurrents |
-| `Get()` | Récupération d'un tenant (copie, jamais le pointeur interne) |
-| `IsBanned()` | Vérification spécialisée du bannissement |
-| `Disable()` / `SetState()` | Modification d'état, atomique sous `Lock()` |
-| `CachedStore` | Ajout d'un cache devant un `Store` |
-| `TTL` | Expiration des données du cache |
-| `singleflight` | Déduplication des appels concurrents en cas de cache miss |
-| `source Store` | Découplage du cache de l'implémentation concrète |
-| `ErrTenantNotFound` | Identification explicite d'un tenant inexistant |
+| `tenant.Store` | Read contract for tenants |
+| `MemoryStore` | In-memory storage |
+| `RWMutex` | Protection of concurrent access |
+| `Get()` | Retrieve a tenant (copy, never the internal pointer) |
+| `IsBanned()` | Specialized ban check |
+| `Disable()` / `SetState()` | State change, atomic under `Lock()` |
+| `CachedStore` | Adds a cache in front of a `Store` |
+| `TTL` | Cache entry expiration |
+| `singleflight` | Deduplication of concurrent calls on a cache miss |
+| `source Store` | Decouples the cache from the concrete implementation |
+| `ErrTenantNotFound` | Explicit identification of a non-existent tenant |
 
-> **L'Étape 1 permettait d'identifier le tenant ; l'Étape 2 permet de récupérer son état de manière sûre et performante, tout en préparant la gestion de la concurrence et du cache.**
+> **Step 1 made it possible to identify the tenant; Step 2 makes it possible to retrieve its state safely and efficiently, while preparing for concurrency and caching concerns.**
 
 ---
 
-## 6. Étape 3 — Ban temps réel
+## 6. Step 3 — Real-time ban
 
-### 6.1 Objectif
+### 6.1 Goal
 
-Le cache de l'Étape 2 était volontairement *eventual-consistent* pour les désactivations. Mais pour un bannissement pour fraude ou abus, ce comportement n'est pas acceptable :
+Step 2's cache was deliberately *eventual-consistent* for disabling. But for a ban due to fraud or abuse, this behavior is not acceptable:
 
 ```text
 Instance A
@@ -1019,22 +1019,22 @@ Instance A
     ▼
 tenant-A = Banned
 
-Instance B (cache non expiré)
+Instance B (cache not expired)
     │
     ▼
 tenant-A = Active   ❌
 ```
 
-L'objectif de cette étape est d'introduire un `EventBus`, un `MemoryEventBus`, un `BanChecker`, et la règle selon laquelle `Ban()` est **synchrone**.
+The goal of this step is to introduce an `EventBus`, a `MemoryEventBus`, a `BanChecker`, and the rule that `Ban()` is **synchronous**.
 
 ```text
               BAN
                │
                ▼
-        changement d'état
+        state change
                │
                ▼
-        publication event
+        publish event
                │
         ┌──────┴──────┐
         ▼             ▼
@@ -1044,26 +1044,26 @@ L'objectif de cette étape est d'introduire un `EventBus`, un `MemoryEventBus`, 
    BanChecker     BanChecker
         │             │
         ▼             ▼
-   blocage immédiat
+   immediate blocking
 ```
 
-### 6.2 Pourquoi le TTL seul ne suffit pas
+### 6.2 Why TTL alone is not enough
 
 ```text
-TTL = 30 secondes
+TTL = 30 seconds
 
 12:00:00 → tenant-A = Active
-12:00:05 → Admin bannit tenant-A
+12:00:05 → Admin bans tenant-A
 
-Une autre instance conserve :
-tenant-A = Active (expiration 12:00:30)
+Another instance still holds:
+tenant-A = Active (expires 12:00:30)
 ```
 
-Sans mécanisme supplémentaire, cette instance pourrait accepter le tenant jusqu'à 12:00:30. Acceptable pour `Disabled`, inacceptable pour `Banned`.
+Without an additional mechanism, this instance could accept the tenant until 12:00:30. Acceptable for `Disabled`, unacceptable for `Banned`.
 
 ```text
-Disabled → cohérence eventual → TTL acceptable
-Banned   → cohérence quasi immédiate → événement nécessaire
+Disabled → eventual consistency → TTL acceptable
+Banned   → near-immediate consistency → event required
 ```
 
 ### 6.3 `TenantEvent`
@@ -1083,11 +1083,11 @@ TenantEvent
 └── Timestamp
 ```
 
-`TenantID` et `State` sont le strict minimum fonctionnel pour qu'un abonné sache quoi faire. `Timestamp` a été ajouté volontairement : sans lui, un futur composant (audit, log) ne pourrait même pas répondre à *« quand ce changement a-t-il eu lieu ? »* — et, plus important encore, il devient indispensable pour résoudre un problème de cohérence temporelle (voir 6.9).
+`TenantID` and `State` are the strict functional minimum for a subscriber to know what to do. `Timestamp` was added deliberately: without it, a future component (audit, logging) couldn't even answer *"when did this change happen?"* — and, more importantly, it becomes indispensable for solving a temporal consistency issue (see 6.9).
 
-L'événement ne dit pas comment le changement doit être traité — il dit simplement : *« le tenant tenant-A est maintenant dans l'état Banned. »*
+The event doesn't say how the change should be handled — it simply says: *"tenant tenant-A is now in the Banned state."*
 
-### 6.4 L'interface `EventBus`
+### 6.4 The `EventBus` interface
 
 ```go
 type EventBus interface {
@@ -1100,15 +1100,15 @@ type EventBus interface {
 Publish
    │
    ▼
-envoyer un événement
+send an event
 
 Subscribe
    │
    ▼
-recevoir les événements
+receive events
 ```
 
-### 6.5 Pourquoi `EventBus` est une interface
+### 6.5 Why `EventBus` is an interface
 
 ```text
                  EventBus
@@ -1120,11 +1120,11 @@ recevoir les événements
  MemoryEventBus          RedisEventBus
 ```
 
-Le cœur du toolkit ne doit connaître que `eventbus.EventBus` — pas Redis, ni NATS, ni Kafka, ni RabbitMQ (implémentations futures envisageables). Même principe que `tenant.Store`.
+The toolkit's core should only know about `eventbus.EventBus` — not Redis, NATS, Kafka, or RabbitMQ (possible future implementations). Same principle as `tenant.Store`.
 
 ### 6.6 MemoryEventBus
 
-Implémentation entièrement en mémoire, utilisée pour développer le mécanisme, le tester, et éviter d'avoir besoin de Redis pendant les premières étapes.
+A fully in-memory implementation, used to develop the mechanism, test it, and avoid needing Redis during the early steps.
 
 ```text
 MemoryEventBus
@@ -1148,17 +1148,17 @@ MemoryEventBus
     handler()        handler()
 ```
 
-### 6.7 Isolation des handlers par goroutine
+### 6.7 Isolating handlers by goroutine
 
-Un point important de l'implémentation : ne **jamais** exécuter les handlers séquentiellement dans la même goroutine. Une mauvaise approche serait :
+An important implementation detail: **never** run handlers sequentially in the same goroutine. A bad approach would be:
 
 ```go
 for _, handler := range handlers {
-    handler(event) // ❌ un handler lent bloque tous les suivants
+    handler(event) // ❌ a slow handler blocks all the following ones
 }
 ```
 
-Si un handler est lent (`time.Sleep`) ou panique, tous les suivants sont retardés ou jamais exécutés. Le principe retenu :
+If a handler is slow (`time.Sleep`) or panics, all following ones are delayed or never run. The principle adopted:
 
 ```text
 Publish
@@ -1170,13 +1170,13 @@ Publish
   └──► goroutine Handler C
 ```
 
-Chaque handler est isolé et démarre en parallèle des autres.
+Each handler is isolated and starts in parallel with the others.
 
-**Un deuxième problème d'efficacité a été identifié** : la première version de `Publish()` retenait un `RLock()` pendant toute la durée d'exécution des handlers, ce qui bloquait tout appel concurrent à `Subscribe()`. La correction retenue : copier la liste des handlers sous `RLock`, libérer immédiatement le verrou, puis lancer les goroutines à partir de la copie — `Subscribe()` n'attend donc plus jamais la fin des handlers en cours.
+**A second efficiency problem was identified**: the first version of `Publish()` held an `RLock()` for the entire duration of the handlers' execution, blocking any concurrent call to `Subscribe()`. The fix adopted: copy the handler list under `RLock`, release the lock immediately, then launch the goroutines from the copy — `Subscribe()` therefore never waits for in-flight handlers anymore.
 
-### 6.8 Protection contre les panics — `recover()`
+### 6.8 Protection against panics — `recover()`
 
-Un handler utilisateur ne doit jamais pouvoir faire tomber tout le processus avec un simple `panic(...)`. Chaque handler est donc exécuté avec un mécanisme de récupération :
+A user-supplied handler must never be able to bring down the whole process with a simple `panic(...)`. Each handler is therefore run with a recovery mechanism:
 
 ```go
 defer func() {
@@ -1186,15 +1186,15 @@ defer func() {
 }()
 ```
 
-> **Un handler défaillant ne doit jamais empêcher les autres handlers de recevoir l'événement.**
+> **A failing handler must never prevent other handlers from receiving the event.**
 
-Point crucial pour un toolkit destiné à des applications externes : un `recover()` ne fonctionne qu'à l'intérieur de la **même goroutine** que le `panic()` — il doit donc être placé dans la fonction lancée par `go`, jamais autour de l'appel à `Publish()` lui-même (qui a déjà retourné depuis longtemps quand le handler s'exécute réellement).
+Crucial point for a toolkit meant for external applications: `recover()` only works **within the same goroutine** as the `panic()` — it must therefore be placed inside the function launched by `go`, never around the call to `Publish()` itself (which has already returned long before the handler actually runs).
 
-**Un compromis assumé** : puisque chaque handler s'exécute dans sa propre goroutine, `Publish()` ne peut plus rapporter directement les erreurs des handlers à l'appelant. Le retour `nil` de `Publish()` signifie donc *« j'ai réussi à lancer la diffusion des handlers »*, pas *« tous les handlers ont traité l'événement avec succès »*.
+**An accepted trade-off**: since each handler runs in its own goroutine, `Publish()` can no longer report handler errors directly to the caller. `Publish()` returning `nil` therefore means *"I successfully started broadcasting to the handlers"*, not *"all handlers processed the event successfully"*.
 
-### 6.9 Le BanChecker
+### 6.9 The BanChecker
 
-L'EventBus transporte l'événement, mais il faut un composant qui **réagisse** au bannissement.
+The EventBus carries the event, but a component is needed that **reacts** to the ban.
 
 ```text
 EventBus
@@ -1204,7 +1204,7 @@ EventBus
 BanChecker
    │
    ▼
-mettre à jour son état local
+update its local state
 ```
 
 ```text
@@ -1216,26 +1216,26 @@ BanChecker
          └── tenant-F
 ```
 
-### 6.10 Pourquoi le BanChecker existe en plus du Store
+### 6.10 Why BanChecker exists in addition to the Store
 
-Le `Store` reste la source de vérité. Le `BanChecker` répond à une question beaucoup plus spécialisée : *« ce tenant est-il actuellement banni ? »*, avec une exigence de vitesse extrême.
+The `Store` remains the source of truth. `BanChecker` answers a much more specialized question: *"is this tenant currently banned?"*, with an extreme speed requirement.
 
 ```text
-Requête
+Request
    ↓
 IsBanned(tenant-A)
    ↓
-mémoire RAM (BanChecker)
+RAM (BanChecker)
    ↓
 true/false
 ```
 
-Si `IsBanned()` devait systématiquement appeler la source de vérité, 10 000 requêtes concernant le même tenant produiraient 10 000 accès à la source. Avec `BanChecker`, ce sont 10 000 lectures RAM — la source n'est sollicitée que lorsqu'un changement d'état doit être propagé (**modèle push**, à l'inverse d'un modèle pull) :
+If `IsBanned()` had to systematically call the source of truth, 10,000 requests for the same tenant would produce 10,000 accesses to the source. With `BanChecker`, that becomes 10,000 RAM reads — the source is only queried when a state change needs to be propagated (**push model**, as opposed to a pull model):
 
 ```text
 Source
    │
-   │ "tenant-A est maintenant Banned"
+   │ "tenant-A is now Banned"
    ▼
 EventBus
    │
@@ -1246,9 +1246,9 @@ BanChecker
 tenant-A → true
 ```
 
-### 6.11 Le principe de priorité du bannissement
+### 6.11 The ban-priority principle
 
-`Banned` doit avoir priorité sur le cache normal. Par exemple, si `CachedStore` indique encore `Active` alors que `BanChecker` sait déjà `Banned`, le système doit considérer le tenant comme banni. `BanChecker` devient une sorte de barrière de sécurité placée devant le chemin normal :
+`Banned` must take priority over the normal cache. For example, if `CachedStore` still shows `Active` while `BanChecker` already knows `Banned`, the system must treat the tenant as banned. `BanChecker` becomes a kind of security barrier placed in front of the normal path:
 
 ```text
                  HTTP Request
@@ -1273,63 +1273,63 @@ tenant-A → true
                           Tenant
 ```
 
-### 6.12 Résolution de conflit par timestamp — l'ordonnancement causal
+### 6.12 Conflict resolution by timestamp — causal ordering
 
-Un problème de cohérence plus profond a été identifié : le chargement d'un **snapshot initial** au démarrage d'une instance (nécessaire en environnement multi-instance, pour connaître l'état des bannissements antérieurs à l'abonnement) peut entrer en conflit avec un **événement récent** reçu entre-temps.
+A deeper consistency problem was identified: loading an **initial snapshot** at instance startup (necessary in a multi-instance environment, to know the state of past bans before subscribing) can conflict with a **recent event** received in the meantime.
 
-**Scénario du problème** : un tenant est débanni (`Active`) juste avant qu'un snapshot périmé (initié avant l'unban, mais dont l'écriture arrive après l'événement) écrase cette information avec `Banned` — la donnée en mémoire redeviendrait alors incorrecte.
+**Problem scenario**: a tenant is unbanned (`Active`) just before a stale snapshot (started before the unban, but whose write arrives after the event) overwrites this information with `Banned` — the in-memory data would then become incorrect again.
 
-**La solution retenue** : chaque entrée du `BanChecker` (pas seulement un booléen `banned`) est associée à un **timestamp de dernière mise à jour**. Une écriture n'est appliquée que si son timestamp est **plus récent** (ou égal) que celui déjà stocké — garantissant qu'une information périmée ne peut jamais écraser une information plus fraîche, quel que soit l'ordre réel d'exécution des goroutines.
+**The solution adopted**: each `BanChecker` entry (not just a `banned` boolean) is associated with a **last-updated timestamp**. A write is only applied if its timestamp is **more recent** (or equal) than the one already stored — guaranteeing that stale information can never overwrite fresher information, regardless of the actual goroutine execution order.
 
-**Règle également établie** : `Subscribe()` doit toujours être appelé **avant** le chargement du snapshot initial, jamais l'inverse — sinon un événement publié entre les deux pourrait être manqué (jamais reçu par aucun mécanisme).
+**Rule also established**: `Subscribe()` must always be called **before** loading the initial snapshot, never the other way around — otherwise an event published in between could be missed (never received by any mechanism).
 
-### 6.13 Ban() synchrone
+### 6.13 Synchronous Ban()
 
-Distinction essentielle entre synchrone et asynchrone :
+An essential distinction between synchronous and asynchronous:
 
-**Synchrone (retenu)**
+**Synchronous (adopted)**
 
 ```text
 Ban()
  │
- ├── changement d'état
+ ├── state change
  │
- ├── publication événement
+ ├── publish event
  │
- └── retour
+ └── return
 ```
 
-La fonction ne retourne pas tant que les opérations qu'elle garantit n'ont pas été réalisées.
+The function doesn't return until the operations it guarantees have been carried out.
 
-**Asynchrone (rejeté)**
+**Asynchronous (rejected)**
 
 ```text
 Ban()
  │
- └── lancer goroutine
+ └── start goroutine
           │
-          └── publier plus tard
+          └── publish later
 
-Ban() retourne immédiatement
+Ban() returns immediately
 ```
 
-Le problème d'une version asynchrone : l'appelant ne saurait jamais si le bannissement a réellement été publié.
+The problem with an asynchronous version: the caller would never know whether the ban was actually published.
 
-### 6.14 Pourquoi Ban() doit être synchrone
+### 6.14 Why Ban() must be synchronous
 
 ```go
 err := Ban(ctx, tenantID)
 ```
 
-`err == nil` doit signifier *« l'opération de bannissement a été effectuée avec succès selon les garanties de cette couche »*, et `err != nil` doit signifier que l'opération n'a pas pu être menée correctement — permettant à l'appelant de réagir immédiatement (par exemple, signaler l'échec).
+`err == nil` must mean *"the ban operation was carried out successfully according to this layer's guarantees"*, and `err != nil` must mean the operation could not be properly carried out — letting the caller react immediately (e.g. by reporting the failure).
 
-### 6.15 Le flux de Ban()
+### 6.15 The Ban() flow
 
 ```text
 Ban(tenant-A)
       │
       ▼
-modifier l'état
+change state
       │
       ▼
 Tenant = Banned
@@ -1338,36 +1338,36 @@ Tenant = Banned
 Publish(TenantEvent)
       │
       ▼
-retourner
+return
 ```
 
-### 6.16 Le problème de non-atomicité (identifié dès cette étape)
+### 6.16 The non-atomicity problem (identified as early as this step)
 
-`SetState()` puis `Publish()` ne constitue **pas** une transaction atomique. Deux scénarios problématiques :
+`SetState()` followed by `Publish()` is **not** an atomic transaction. Two problematic scenarios:
 
 ```text
 SetState() → SUCCESS
 Publish()  → FAILURE
 ```
 
-La source de vérité dit `Banned`, mais l'`EventBus` n'a transmis aucun événement — les autres instances peuvent ne pas savoir immédiatement que le tenant est banni.
+The source of truth says `Banned`, but the `EventBus` didn't transmit any event — other instances may not immediately know the tenant is banned.
 
 ```text
 Publish()  → SUCCESS
 SetState() → FAILURE
 ```
 
-Encore plus dangereux : les autres instances croiraient le tenant banni, alors que la source de vérité dit toujours `Active` — un **événement mensonger**.
+Even more dangerous: other instances would believe the tenant is banned, while the source of truth still says `Active` — a **lying event**.
 
-**Décision retenue** : `SetState → Publish` (jamais l'inverse), avec l'idée qu'un mécanisme plus robuste (Outbox) pourra résoudre l'atomicité et la livraison durable plus tard (voir Étape 7, section 10.8 et [limites futures](#16-limites-et-évolutions-futures)).
+**Decision adopted**: `SetState → Publish` (never the reverse), with the idea that a more robust mechanism (Outbox) could later solve durability and atomicity (see Step 7, section 10.8, and [future limitations](#16-limitations-and-future-evolutions)).
 
-### 6.17 Pourquoi l'Outbox n'était pas nécessaire à cette étape
+### 6.17 Why the Outbox wasn't needed at this step
 
-> Construire d'abord le contrat et le comportement correct, puis renforcer la fiabilité progressivement.
+> Build the correct contract and behavior first, then progressively reinforce reliability.
 
-Les fondations construites ici (`TenantEvent`, `EventBus`, `MemoryEventBus`, `BanChecker`, `Ban()`) ont ensuite permis, à l'Étape 7, d'introduire `RedisEventBus` comme un simple **changement d'adaptateur** — pas une réécriture du cœur métier.
+The foundations built here (`TenantEvent`, `EventBus`, `MemoryEventBus`, `BanChecker`, `Ban()`) later made it possible, in Step 7, to introduce `RedisEventBus` as a simple **adapter swap** — not a rewrite of the business core.
 
-### 6.18 Architecture complète de l'Étape 3
+### 6.18 Complete architecture of Step 3
 
 ```text
 tenant-core/
@@ -1409,10 +1409,10 @@ tenant-core/
                BanChecker
 ```
 
-### 6.19 Architecture distribuée déjà préparée
+### 6.19 Distributed architecture already prepared
 
 ```text
-Aujourd'hui
+Today
               Instance A
                   │
              MemoryEventBus
@@ -1420,7 +1420,7 @@ Aujourd'hui
                   ▼
              BanChecker A
 
-Demain (avec Redis)
+Tomorrow (with Redis)
 Instance A                         Instance B
     │                                  │
     ▼                                  ▼
@@ -1430,56 +1430,56 @@ Ban()                            BanChecker
 RedisEventBus ─────── Redis ───────────┘
 ```
 
-Le contrat `EventBus` ne change jamais — seule l'implémentation passe de `MemoryEventBus` à `RedisEventBus`.
+The `EventBus` contract never changes — only the implementation moves from `MemoryEventBus` to `RedisEventBus`.
 
-### 6.20 Résumé de l'Étape 3
+### 6.20 Step 3 summary
 
-| Élément | Responsabilité |
+| Element | Responsibility |
 |---|---|
-| `TenantEvent` | Représente un changement d'état |
-| `EventBus` | Contrat de publication/abonnement |
-| `MemoryEventBus` | `EventBus` local en mémoire |
-| `Publish()` | Diffuse un événement |
-| `Subscribe()` | Enregistre un handler |
-| Goroutine par handler | Isolation et non-blocage entre handlers |
-| `recover()` | Empêche un panic de tuer le traitement |
-| `BanChecker` | Maintient la connaissance immédiate des tenants bannis |
-| `Ban()` | Déclenche le changement de bannissement et sa propagation, de façon synchrone |
-| Résolution par timestamp | Empêche un snapshot périmé d'écraser un événement plus récent |
-| TTL | Toujours acceptable pour `Disabled`, mais insuffisant pour `Banned` |
-| Redis | Sera l'implémentation distribuée future (Étape 7) |
+| `TenantEvent` | Represents a state change |
+| `EventBus` | Publish/subscribe contract |
+| `MemoryEventBus` | Local, in-memory `EventBus` |
+| `Publish()` | Broadcasts an event |
+| `Subscribe()` | Registers a handler |
+| One goroutine per handler | Isolation and non-blocking between handlers |
+| `recover()` | Prevents a panic from killing processing |
+| `BanChecker` | Maintains immediate knowledge of banned tenants |
+| `Ban()` | Triggers the ban change and its propagation, synchronously |
+| Timestamp-based resolution | Prevents a stale snapshot from overwriting a more recent event |
+| TTL | Always acceptable for `Disabled`, but insufficient for `Banned` |
+| Redis | Will be the future distributed implementation (Step 7) |
 
-> **L'Étape 2 acceptait une propagation retardée via le TTL ; l'Étape 3 introduit un canal d'événements permettant au bannissement de devenir une information active et immédiatement propagée.**
+> **Step 2 accepted delayed propagation via TTL; Step 3 introduces an event channel that turns a ban into an active, immediately propagated piece of information.**
 
-Principe architectural central établi :
+Core architectural principle established:
 
-- **Store** = « Quelle est la vérité sur le tenant ? »
-- **Cache** = « Comment éviter de relire cette vérité trop souvent ? »
-- **EventBus** = « Comment annoncer qu'elle vient de changer ? »
-- **BanChecker** = « Comment appliquer immédiatement la règle critique du bannissement ? »
+- **Store** = "What is the truth about the tenant?"
+- **Cache** = "How do we avoid re-reading that truth too often?"
+- **EventBus** = "How do we announce that it just changed?"
+- **BanChecker** = "How do we immediately enforce the critical ban rule?"
 
 ---
 
-## 7. Étape 4 — RateLimiter et CacheKeyer
+## 7. Step 4 — RateLimiter and CacheKeyer
 
-### 7.1 Objectif
+### 7.1 Goal
 
-Cette étape ajoute deux mécanismes transversaux qui renforcent le toolkit sans le faire dépendre d'une technologie particulière, en conservant le principe posé depuis l'Étape 1 : *le package `tenant` définit les contrats, les sous-packages fournissent les implémentations.*
+This step adds two cross-cutting mechanisms that strengthen the toolkit without making it depend on any particular technology, keeping the principle set since Step 1: *the `tenant` package defines the contracts, the sub-packages provide the implementations.*
 
-Deux protections manquaient jusqu'ici :
+Two protections were still missing:
 
-**Protection n°1 — abus de requêtes.** Un tenant pourrait envoyer un volume disproportionné de requêtes (`tenant-A → 10 000 requêtes/seconde`) et monopoliser les ressources du serveur.
+**Protection #1 — request abuse.** A tenant could send a disproportionate volume of requests (`tenant-A → 10,000 requests/second`) and monopolize server resources.
 
-**Protection n°2 — isolation du cache.** Une clé de cache applicative naïve comme `"user:123"` pourrait provoquer une collision entre deux tenants ayant chacun un utilisateur d'identifiant `123` :
+**Protection #2 — cache isolation.** A naive application cache key like `"user:123"` could cause a collision between two tenants each having a user with ID `123`:
 
 ```text
 tenant-A + user-123
 tenant-B + user-123
 ```
 
-Une clé globale `user:123` créerait une fuite de données entre tenants — exactement le genre de bug catastrophique qu'un système multi-tenant doit empêcher structurellement.
+A global `user:123` key would create a data leak between tenants — exactly the kind of catastrophic bug a multi-tenant system must structurally prevent.
 
-### 7.2 Architecture générale
+### 7.2 General architecture
 
 ```text
                     ┌──────────────────────┐
@@ -1505,56 +1505,56 @@ Une clé globale `user:123` créerait une fuite de données entre tenants — ex
       └───────┬───────┘                └───────┬───────┘
               │                                │
               ▼                                ▼
-       Limite par tenant                 Clé isolée
+       Per-tenant limit                 Isolated key
               │                                │
               └───────────────┬────────────────┘
                               │
                               ▼
-                       Application métier
+                       Business application
 ```
 
-`RateLimiter` et `CacheKeyer` sont deux composants indépendants : ni l'un ni l'autre ne doit connaître Redis directement, ce qui permet ensuite d'envisager différentes implémentations (`MemoryRateLimiter`, `RedisRateLimiter` futur ; `DefaultCacheKeyer`).
+`RateLimiter` and `CacheKeyer` are two independent components: neither should know Redis directly, which then allows for different implementations (`MemoryRateLimiter`, a future `RedisRateLimiter`; `DefaultCacheKeyer`).
 
-### 7.3 RateLimiter — responsabilité
+### 7.3 RateLimiter — responsibility
 
-Le `RateLimiter` répond à une question très simple : *« ce tenant a-t-il encore le droit d'effectuer cette requête ? »* Il ne décide ni quel tenant est utilisé, ni comment il est résolu ou stocké, ni comment répondre en HTTP — il se concentre uniquement sur la limitation.
+`RateLimiter` answers one very simple question: *"is this tenant still allowed to make this request?"* It decides neither which tenant is used, nor how it's resolved or stored, nor how to respond in HTTP — it focuses solely on limiting.
 
-### 7.4 Pourquoi le RateLimiter est lié au tenant
+### 7.4 Why RateLimiter is tied to the tenant
 
-Une limite globale naïve pénaliserait les tenants entre eux :
+A naive global limit would penalize tenants against each other:
 
 ```text
 Tenant A ─┐
-Tenant B  ├──► même compteur (❌ mauvais)
+Tenant B  ├──► same counter (❌ bad)
 Tenant C ─┘
 ```
 
-La bonne approche isole chaque compteur par tenant :
+The correct approach isolates each counter per tenant:
 
 ```text
-Tenant A → compteur A → 100 req/min
-Tenant B → compteur B → 100 req/min
-Tenant C → compteur C → 100 req/min
+Tenant A → counter A → 100 req/min
+Tenant B → counter B → 100 req/min
+Tenant C → counter C → 100 req/min
 ```
 
-La clé logique du rate limiting est donc le `TenantID`.
+The rate limiting's logical key is therefore the `TenantID`.
 
-### 7.5 Fonctionnement — exemple
+### 7.5 How it works — example
 
-Avec une limite de 5 requêtes/minute pour `tenant-A` :
+With a limit of 5 requests/minute for `tenant-A`:
 
 ```text
-Requête 1 → ALLOW
-Requête 2 → ALLOW
-Requête 3 → ALLOW
-Requête 4 → ALLOW
-Requête 5 → ALLOW
-Requête 6 → DENY
+Request 1 → ALLOW
+Request 2 → ALLOW
+Request 3 → ALLOW
+Request 4 → ALLOW
+Request 5 → ALLOW
+Request 6 → DENY
 ```
 
-`tenant-B`, avec son propre compteur indépendant (`0 / 5` utilisées), reste autorisé.
+`tenant-B`, with its own independent counter (`0 / 5` used), remains allowed.
 
-### 7.6 Implémentation mémoire
+### 7.6 In-memory implementation
 
 ```text
 MemoryRateLimiter
@@ -1563,42 +1563,42 @@ MemoryRateLimiter
 ┌───────────────────────────┐
 │ map[TenantID]*bucket      │
 ├───────────────────────────┤
-│ tenant-A → compteur       │
-│ tenant-B → compteur       │
-│ tenant-C → compteur       │
+│ tenant-A → counter        │
+│ tenant-B → counter        │
+│ tenant-C → counter        │
 └───────────────────────────┘
 ```
 
-Comme plusieurs goroutines HTTP peuvent accéder simultanément à cette structure, son état partagé doit être protégé — même principe qu'avec `MemoryStore`.
+Since multiple HTTP goroutines can access this structure simultaneously, its shared state must be protected — the same principle as with `MemoryStore`.
 
-L'implémentation concrète retenue s'appuie sur une clé (`TenantID`) associée à un limiteur individuel de type *token bucket*, chaque tenant possédant son propre "seau à jetons" (voir [section 14](#14-concurrence-et-thread-safety) pour les détails de concurrence, notamment l'usage de `LoadOrStore` pour garantir qu'un seul limiteur survit par tenant même sous accès concurrent).
+The concrete implementation adopted relies on a key (`TenantID`) associated with an individual *token bucket*-style limiter, each tenant having its own "bucket of tokens" (see [section 14](#14-concurrency-and-thread-safety) for concurrency details, notably the use of `LoadOrStore` to guarantee that only one limiter survives per tenant even under concurrent access).
 
-**Le principe métier — deux grands modèles conceptuels de rate limiting**, tels que présentés dans la documentation d'introduction :
+**The business principle — two major conceptual rate-limiting models**, as presented in the introductory documentation:
 
-| Modèle | Principe | Cas d'usage |
+| Model | Principle | Use case |
 |---|---|---|
-| **Token Bucket** | Un seau se remplit de jetons à vitesse constante ; chaque requête consomme un jeton ; seau vide → blocage | Idéal pour des rafales (*bursts*) modérées |
-| **Leaky Bucket** | Un seau qui fuit à débit constant ; les requêtes arrivent brutalement mais sortent à rythme régulier | Idéal pour lisser les pics de trafic |
+| **Token Bucket** | A bucket fills with tokens at a constant rate; each request consumes a token; empty bucket → blocked | Ideal for moderate bursts |
+| **Leaky Bucket** | A bucket that leaks at a constant rate; requests arrive in bursts but leave at a steady pace | Ideal for smoothing traffic spikes |
 
-### 7.7 Fenêtre temporelle / TTL
+### 7.7 Time window / TTL
 
-Le `RateLimiter` doit également savoir quand une limite se réinitialise. Selon l'algorithme retenu, cela peut être implémenté avec une fenêtre fixe (*fixed window*), une fenêtre glissante (*sliding window*), un *token bucket*, ou un *leaky bucket*. Pour une première implémentation, une stratégie simple et déterministe reste préférable.
+The `RateLimiter` must also know when a limit resets. Depending on the chosen algorithm, this can be implemented with a fixed window, a sliding window, a token bucket, or a leaky bucket. For a first implementation, a simple, deterministic strategy remains preferable.
 
-### 7.8 Pourquoi le RateLimiter n'est pas immédiatement intégré dans Manager
+### 7.8 Why RateLimiter is not immediately integrated into Manager
 
-Le `Manager` reste responsable principalement de `Request → Resolver → TenantID → Store → Tenant`. Le rate limiting est une responsabilité **supplémentaire**, qui pourrait être intégrée au pipeline (avant ou après la résolution complète du tenant), mais il faut éviter de transformer `Manager` en objet connaissant toutes les préoccupations du toolkit — chaque middleware ou composant appelant reste libre de l'invoquer explicitement là où c'est pertinent.
+`Manager` remains primarily responsible for `Request → Resolver → TenantID → Store → Tenant`. Rate limiting is an **additional** responsibility, which could be integrated into the pipeline (before or after full tenant resolution), but `Manager` must not be turned into an object aware of every concern in the toolkit — each calling middleware or component remains free to invoke it explicitly wherever relevant.
 
-### 7.9 CacheKeyer — responsabilité
+### 7.9 CacheKeyer — responsibility
 
-Transformer une clé logique d'application en une clé réellement isolée par tenant :
+Turn a logical application key into a key that is truly isolated per tenant:
 
 ```text
-clé logique : "user:123"
+logical key: "user:123"
         ↓
 tenant-A:user:123
 ```
 
-### 7.10 Contrat du CacheKeyer
+### 7.10 CacheKeyer contract
 
 ```go
 type CacheKeyer interface {
@@ -1606,7 +1606,7 @@ type CacheKeyer interface {
 }
 ```
 
-Reçoit un `TenantID` et une clé applicative, retourne une clé isolée :
+Receives a `TenantID` and an application key, returns an isolated key:
 
 ```text
 keyer.Key("tenant-A", "users:123")
@@ -1614,21 +1614,21 @@ keyer.Key("tenant-A", "users:123")
 "tenant-A:users:123"
 ```
 
-### 7.11 Le CacheKeyer ne stocke rien
+### 7.11 CacheKeyer stores nothing
 
-Il ne fait ni `Get`, ni `Set`, ni `Delete` — uniquement la construction de clé :
+It does neither `Get`, nor `Set`, nor `Delete` — only key construction:
 
 ```text
 CacheKeyer
     │
-    └── construction de clé
+    └── key construction
 
 Cache
     │
-    └── stockage de donnée
+    └── data storage
 ```
 
-Ces deux responsabilités restent strictement séparées :
+These two responsibilities remain strictly separate:
 
 ```text
                     Application
@@ -1647,9 +1647,9 @@ Ces deux responsabilités restent strictement séparées :
                   └──────────┘
 ```
 
-Le cache peut être une implémentation mémoire, Redis, Memcached ou autre — le `CacheKeyer` reste identique.
+The cache can be an in-memory, Redis, Memcached, or other implementation — `CacheKeyer` stays the same.
 
-### 7.12 Isolation : principe fondamental de cette étape
+### 7.12 Isolation: the fundamental principle of this step
 
 ```text
                     TenantID
@@ -1660,14 +1660,14 @@ Le cache peut être une implémentation mémoire, Redis, Memcached ou autre — 
       Store        CacheKeyer     RateLimiter
         │              │              │
         ▼              ▼              ▼
-     Tenant       Cache isolé    Limite isolée
+     Tenant       Isolated cache  Isolated limit
 ```
 
-> **Toute ressource partagée doit être explicitement dimensionnée par TenantID.**
+> **Every shared resource must be explicitly scoped by TenantID.**
 
-C'est ce qui empêche qu'un tenant puisse accidentellement consommer le quota d'un autre, lire une donnée mise en cache pour un autre tenant, provoquer une collision de clés, ou contourner l'isolation logique du système.
+This is what prevents one tenant from accidentally consuming another's quota, reading data cached for another tenant, causing key collisions, or bypassing the system's logical isolation.
 
-### 7.13 Architecture globale après cette étape
+### 7.13 Overall architecture after this step
 
 ```text
                          HTTP Request
@@ -1700,10 +1700,10 @@ C'est ce qui empêche qu'un tenant puisse accidentellement consommer le quota d'
                     BanChecker                    tenantctx
                          │                             │
                          ▼                             ▼
-                  état du tenant              Application
+                  tenant state                Application
                          │
                          ▼
-                    Banned ?
+                    Banned?
                          │
                   ┌──────┴──────┐
                   │             │
@@ -1729,7 +1729,7 @@ C'est ce qui empêche qu'un tenant puisse accidentellement consommer le quota d'
        └─────────────────────────────────────┘
 ```
 
-### 7.14 Principe d'agnosticisme (rappel)
+### 7.14 Agnosticism principle (reminder)
 
 ```text
              tenant
@@ -1742,50 +1742,50 @@ C'est ce qui empêche qu'un tenant puisse accidentellement consommer le quota d'
 MemoryRateLimiter   CacheKeyer
        │
        ▼
-Implémentation
+Implementation
 
-Puis plus tard :
+Then later:
 
 RateLimiter
      │
      ├── MemoryRateLimiter
      │
-     └── RedisRateLimiter (évolution future)
+     └── RedisRateLimiter (future evolution)
 ```
 
-### 7.15 Tests à prévoir
+### 7.15 Tests to plan
 
-**RateLimiter** — vérifier au minimum : la première requête est autorisée ; les requêtes jusqu'à la limite sont autorisées ; une requête dépassant la limite est refusée ; une nouvelle fenêtre redevient autorisée ; un tenant ne bloque jamais un autre tenant ; l'accès concurrent ne produit aucune race condition (`go test -race`).
+**RateLimiter** — verify at minimum: the first request is allowed; requests up to the limit are allowed; a request exceeding the limit is rejected; a new window becomes allowed again; one tenant never blocks another; concurrent access produces no race condition (`go test -race`).
 
-**CacheKeyer** — vérifier que `tenant-A + users:123` et `tenant-B + users:123` produisent des clés différentes (`tenant-A:users:123 != tenant-B:users:123`) — un test d'isolation fondamental.
+**CacheKeyer** — verify that `tenant-A + users:123` and `tenant-B + users:123` produce different keys (`tenant-A:users:123 != tenant-B:users:123`) — a fundamental isolation test.
 
-### 7.16 Résumé de l'Étape 4
+### 7.16 Step 4 summary
 
-| Composant | Responsabilité | Ne doit pas connaître |
+| Component | Responsibility | Must not know about |
 |---|---|---|
-| `RateLimiter` | Limiter les requêtes par tenant | HTTP, Redis |
-| `MemoryRateLimiter` | Implémentation locale du rate limiting | Logique HTTP |
-| `CacheKeyer` | Construire des clés isolées | Stockage du cache |
-| `Cache` | Stocker les données | Logique de construction des clés |
-| `TenantID` | Identifier le tenant | Infrastructure |
-| `Manager` | Résoudre/récupérer le tenant | Détails du cache |
-| `BanChecker` | Vérifier le bannissement | Transport HTTP |
+| `RateLimiter` | Limit requests per tenant | HTTP, Redis |
+| `MemoryRateLimiter` | Local rate limiting implementation | HTTP logic |
+| `CacheKeyer` | Build isolated keys | Cache storage |
+| `Cache` | Store the data | Key-building logic |
+| `TenantID` | Identify the tenant | Infrastructure |
+| `Manager` | Resolve/retrieve the tenant | Cache details |
+| `BanChecker` | Check for a ban | HTTP transport |
 
-> **La règle fondamentale de cette étape : toute ressource partagée doit être explicitement dimensionnée par TenantID.**
+> **The fundamental rule of this step: every shared resource must be explicitly scoped by TenantID.**
 
 ---
 
-## 8. Étape 5 — RBAC et Metrics
+## 8. Step 5 — RBAC and Metrics
 
-### 8.1 Objectif
+### 8.1 Goal
 
-Après l'Étape 4, le toolkit sait identifier le tenant, récupérer son état, gérer le cache, détecter un bannissement, limiter les requêtes et construire des clés de cache isolées. Deux questions restaient ouvertes :
+After Step 4, the toolkit knows how to identify the tenant, retrieve its state, manage the cache, detect a ban, limit requests, and build isolated cache keys. Two questions remained open:
 
-**Question 1 — Autorisation.** *« Ce tenant a-t-il le droit de faire cette opération ? »* — c'est le rôle du **RBAC**.
+**Question 1 — Authorization.** *"Is this tenant allowed to perform this operation?"* — that's the role of **RBAC**.
 
-**Question 2 — Observabilité.** *« Combien de requêtes sont traitées ? Combien sont refusées ? Combien de tenants sont actifs ? Combien de bannissements se produisent ? »* — c'est le rôle des **Metrics**.
+**Question 2 — Observability.** *"How many requests are being processed? How many are rejected? How many tenants are active? How many bans occur?"* — that's the role of **Metrics**.
 
-### 8.2 Architecture générale
+### 8.2 General architecture
 
 ```text
                          HTTP Request
@@ -1801,7 +1801,7 @@ Après l'Étape 4, le toolkit sait identifier le tenant, récupérer son état, 
                     ▼                   ▼
               RateLimiter             RBAC
                     │                   │
-                    │             Autorisation
+                    │             Authorization
                     │                   │
                     └─────────┬─────────┘
                               │
@@ -1818,13 +1818,13 @@ Après l'Étape 4, le toolkit sait identifier le tenant, récupérer son état, 
                  Metrics           Prometheus
 ```
 
-RBAC (sécurité/autorisation) et Metrics (observabilité) sont indépendants et ne doivent jamais être mélangés.
+RBAC (security/authorization) and Metrics (observability) are independent and must never be mixed.
 
-### 8.3 Partie 1 — RBAC
+### 8.3 Part 1 — RBAC
 
-**Principe.** *Role-Based Access Control.* Au lieu de coder en dur *« Sylvinhio peut effectuer X »*, on définit `Role → Permissions`, puis un tenant possède un ou plusieurs rôles — via le champ `Roles []string` déjà présent dans `Tenant` depuis l'Étape 1.
+**Principle.** *Role-Based Access Control.* Instead of hardcoding *"Sylvinhio can do X"*, we define `Role → Permissions`, and a tenant then has one or more roles — via the `Roles []string` field already present on `Tenant` since Step 1.
 
-**Exemple concret**
+**Concrete example**
 
 ```text
 Tenant A          Tenant B
@@ -1843,9 +1843,9 @@ Tenant A + tenant.write → ALLOW
 Tenant B + tenant.write → DENY
 ```
 
-### 8.4 Séparation rôle / permission
+### 8.4 Separating role from permission
 
-Il ne faut surtout pas coder en dur `if tenant.Roles[0] == "admin" { ... }` partout dans l'application. On préfère :
+Above all, one should never hardcode `if tenant.Roles[0] == "admin" { ... }` throughout the application. Instead:
 
 ```text
 Tenant
@@ -1862,9 +1862,9 @@ Permission
        └── DENY
 ```
 
-L'application demande simplement : *« ce tenant possède-t-il cette permission ? »*, et le composant RBAC gère le reste.
+The application simply asks: *"does this tenant have this permission?"*, and the RBAC component handles the rest.
 
-### 8.5 Contrat minimal — `Authorizer` / `Can`
+### 8.5 Minimal contract — `Authorizer` / `Can`
 
 ```go
 type Authorizer interface {
@@ -1872,9 +1872,9 @@ type Authorizer interface {
 }
 ```
 
-Le contrat exprime uniquement : *« est-ce que ce tenant peut effectuer cette action ? »* — sans connaître HTTP, Gin, Echo, Redis, PostgreSQL ni Prometheus.
+The contract expresses only: *"can this tenant perform this action?"* — with no knowledge of HTTP, Gin, Echo, Redis, PostgreSQL, or Prometheus.
 
-**Implémentation retenue** — les définitions de rôles/permissions sont organisées **par tenant** (pas une seule table globale de rôles partagée par tous), avec les permissions d'un rôle représentées comme un **set** (`map[string]struct{}`) plutôt qu'une simple liste, pour une vérification en O(1) au lieu d'une recherche linéaire :
+**Implementation adopted** — role/permission definitions are organized **per tenant** (not a single global role table shared by everyone), with a role's permissions represented as a **set** (`map[string]struct{}`) rather than a plain list, for O(1) lookups instead of a linear search:
 
 ```text
 Tenant A
@@ -1888,11 +1888,11 @@ Tenant A
          └── users:read
 ```
 
-Cette organisation par tenant est fondamentale : deux tenants peuvent avoir un rôle du **même nom** avec des permissions **complètement différentes** — le rôle `admin` du tenant A n'implique rien sur ce que `admin` signifie pour le tenant B.
+This per-tenant organization is fundamental: two tenants can have a role with the **same name** but **completely different** permissions — tenant A's `admin` role implies nothing about what `admin` means for tenant B.
 
-### 8.6 Pourquoi Tenant est fourni au RBAC
+### 8.6 Why Tenant is provided to RBAC
 
-Le RBAC ne doit pas refaire une requête vers le Store pour connaître les rôles — le `Manager` a déjà récupéré le `*Tenant` complet, y compris `Roles`. Cela évite une seconde récupération inutile.
+RBAC should not make a second request to the Store to learn the roles — `Manager` has already retrieved the full `*Tenant`, including `Roles`. This avoids an unnecessary second fetch.
 
 ```text
 Manager
@@ -1908,13 +1908,13 @@ Tenant
         RBAC
 ```
 
-### 8.7 Exemple d'utilisation
+### 8.7 Usage example
 
 ```go
 allowed := rbac.Can(tenant, "users.create")
 ```
 
-Le toolkit reste agnostique de la façon dont l'application traduit un refus :
+The toolkit remains agnostic about how the application translates a denial:
 
 ```text
 RBAC
@@ -1923,25 +1923,25 @@ RBAC
        │
        ├── HTTP → 403 Forbidden
        ├── gRPC → PermissionDenied
-       └── CLI → message d'erreur
+       └── CLI → error message
 ```
 
-Même principe d'agnosticisme que pour `AdminService` (voir Étape 7).
+Same agnosticism principle as `AdminService` (see Step 7).
 
-### 8.8 RBAC et multi-tenancy — deux questions distinctes
+### 8.8 RBAC and multi-tenancy — two distinct questions
 
-- **Tenant** répond à : *« de quel espace isolé provient cette requête ? »*
-- **RBAC** répond à : *« que peut faire cet acteur dans cet espace ? »*
+- **Tenant** answers: *"which isolated space does this request come from?"*
+- **RBAC** answers: *"what can this actor do within that space?"*
 
 ```text
 Resolver → Tenant A → RBAC → Permission
 ```
 
-Le RBAC ne remplace jamais le mécanisme de tenant ; il s'y ajoute.
+RBAC never replaces the tenant mechanism; it adds to it.
 
-### 8.9 Évolutivité — Role → Permissions → Action
+### 8.9 Evolvability — Role → Permissions → Action
 
-Un mauvais design fige les capacités dans un `if role == "admin"`. Une architecture évolutive relie un rôle à une liste de permissions, qui peut être étendue sans modifier la logique applicative :
+A bad design freezes capabilities into an `if role == "admin"`. An evolvable architecture links a role to a list of permissions, which can be extended without touching application logic:
 
 ```text
 admin
@@ -1957,13 +1957,13 @@ viewer
     users.read
 ```
 
-### 8.10 Partie 2 — Metrics
+### 8.10 Part 2 — Metrics
 
-Un toolkit multi-tenant en production doit permettre de répondre à des questions comme : combien de requêtes sont reçues ? combien sont rejetées ? combien sont bloquées par le rate limiter ? combien de tenants sont bannis ? combien de temps prend la résolution d'un tenant ? combien d'erreurs produit le Store ? C'est le rôle des Metrics, avec Prometheus comme backend d'exposition envisagé.
+A production multi-tenant toolkit must be able to answer questions like: how many requests are received? how many are rejected? how many are blocked by the rate limiter? how many tenants are banned? how long does tenant resolution take? how many errors does the Store produce? That's the role of Metrics, with Prometheus envisioned as the exposition backend.
 
-### 8.11 Pourquoi une abstraction Metrics
+### 8.11 Why a Metrics abstraction
 
-Il serait dommageable que `Manager` contienne directement des types `prometheus.CounterVec`/`prometheus.HistogramVec`, faisant dépendre le cœur de `github.com/prometheus/client_golang` — perdant l'agnosticisme.
+It would be harmful for `Manager` to directly contain `prometheus.CounterVec`/`prometheus.HistogramVec` types, making the core depend on `github.com/prometheus/client_golang` — losing agnosticism.
 
 ```text
 tenant
@@ -1975,9 +1975,9 @@ tenant
         └── PrometheusMetrics (production)
 ```
 
-### 8.12 Contrat Metrics (conceptuel) et implémentation retenue
+### 8.12 Metrics contract (conceptual) and implementation adopted
 
-Le contrat minimal conceptuel envisagé :
+The minimal conceptual contract initially envisioned:
 
 ```go
 type Metrics interface {
@@ -1986,7 +1986,7 @@ type Metrics interface {
 }
 ```
 
-**L'interface effectivement retenue et implémentée**, plus proche des besoins réels formulés dans le cahier des charges (besoin fonctionnel #5 — latence, RPS, taux d'erreur), expose trois opérations paramétrées par tenant :
+**The interface actually adopted and implemented**, closer to the real needs stated in the spec (functional requirement #5 — latency, RPS, error rate), exposes three operations parameterized by tenant:
 
 ```go
 type MetricsCollector interface {
@@ -1996,17 +1996,17 @@ type MetricsCollector interface {
 }
 ```
 
-Une implémentation `MemoryMetrics` maintient, **par tenant**, des compteurs `requests`, `errors`, `latencySum` et `latencyCount` (permettant de calculer une moyenne de latence), avec deux niveaux de concurrence combinés (voir [section 14](#14-concurrence-et-thread-safety)) : `sync.Map` pour la collection dynamique de tenants, et `atomic.Int64` pour chaque compteur individuel.
+A `MemoryMetrics` implementation maintains, **per tenant**, `requests`, `errors`, `latencySum`, and `latencyCount` counters (allowing average latency to be computed), combining two levels of concurrency (see [section 14](#14-concurrency-and-thread-safety)): `sync.Map` for the dynamic collection of tenants, and `atomic.Int64` for each individual counter.
 
-### 8.13 Types de métriques (modèle Prometheus)
+### 8.13 Types of metrics (Prometheus model)
 
-**Counter** — une valeur qui augmente uniquement (`tenant_requests_total`). Utilisée pour compter des requêtes, erreurs, refus RBAC, refus RateLimiter, bannissements.
+**Counter** — a value that only increases (`tenant_requests_total`). Used to count requests, errors, RBAC denials, RateLimiter denials, bans.
 
-**Histogram** — mesure une distribution (`tenant_resolution_duration_seconds`), permettant de détecter une dégradation de performance.
+**Histogram** — measures a distribution (`tenant_resolution_duration_seconds`), enabling detection of a performance degradation.
 
-**Gauge** — une valeur qui peut monter et descendre (`tenants_active`).
+**Gauge** — a value that can go up and down (`tenants_active`).
 
-### 8.14 Exemple de métriques utiles
+### 8.14 Example of useful metrics
 
 ```text
 tenant_requests_total
@@ -2018,33 +2018,33 @@ tenant_resolution_duration_seconds
 tenant_banned_total
 ```
 
-L'objectif n'est pas de créer des centaines de métriques, mais de privilégier peu de métriques réellement utiles.
+The goal is not to create hundreds of metrics, but to favor a small number of genuinely useful ones.
 
-### 8.15 Précaution : la cardinalité des labels Prometheus
+### 8.15 Caution: Prometheus label cardinality
 
-Point particulièrement important dans un système multi-tenant : chaque combinaison de labels crée une série temporelle Prometheus distincte. Utiliser `tenant_id` directement comme label pour une plateforme avec des dizaines de milliers de tenants peut créer une explosion de cardinalité.
+A particularly important point in a multi-tenant system: each label combination creates a distinct Prometheus time series. Using `tenant_id` directly as a label for a platform with tens of thousands of tenants can create a cardinality explosion.
 
 ```text
-Mauvaise idée
-tenant_requests_total{tenant_id="..."} pour chaque tenant sans réflexion
+Bad idea
+tenant_requests_total{tenant_id="..."} for every tenant without thought
 
-Préférable
+Preferable
 tenant_requests_total{status="success", source="api"}
 tenant_rbac_denied_total{permission="users.read"}
 ```
 
-> **Règle retenue : ne jamais utiliser une donnée utilisateur à forte cardinalité comme label Prometheus sans justification — particulièrement vrai pour `TenantID`.**
+> **Rule adopted: never use a high-cardinality piece of user data as a Prometheus label without justification — particularly true for `TenantID`.**
 
-### 8.16 Séparation RBAC / Metrics
+### 8.16 RBAC / Metrics separation
 
-Il ne faut jamais faire `RBAC → Prometheus` directement. Le RBAC effectue son travail (`Can(...)`), puis une couche supérieure enregistre le résultat dans les métriques :
+`RBAC → Prometheus` directly should never happen. RBAC does its job (`Can(...)`), then an upper layer records the result in the metrics:
 
 ```text
              ┌──────────────┐
              │     RBAC     │
              └──────┬───────┘
                     │
-                 résultat
+                 result
                     │
                     ▼
              ┌──────────────┐
@@ -2055,9 +2055,9 @@ Il ne faut jamais faire `RBAC → Prometheus` directement. Le RBAC effectue son 
                 Prometheus
 ```
 
-Sinon le RBAC deviendrait dépendant de Prometheus, brisant l'agnosticisme.
+Otherwise RBAC would become dependent on Prometheus, breaking agnosticism.
 
-### 8.17 Architecture des packages
+### 8.17 Package architecture
 
 ```text
 tenant-core/
@@ -2080,10 +2080,10 @@ tenant-core/
 ├── rbac/
 │
 └── metrics/
-    └── prometheus/ (adaptateur envisagé)
+    └── prometheus/ (envisioned adapter)
 ```
 
-### 8.18 Relation avec les interfaces Go (typage structurel, rappel)
+### 8.18 Relation to Go interfaces (structural typing, reminder)
 
 ```go
 type Metrics interface {
@@ -2092,78 +2092,78 @@ type Metrics interface {
 }
 ```
 
-Une implémentation `PrometheusMetrics` possédant les bonnes méthodes satisfait automatiquement `tenant.Metrics` sans déclaration explicite — même mécanisme que `tenant.Store`, `tenant.Resolver`, `tenant.AdminStore`, `eventbus.EventBus`.
+A `PrometheusMetrics` implementation having the right methods automatically satisfies `tenant.Metrics` with no explicit declaration — same mechanism as `tenant.Store`, `tenant.Resolver`, `tenant.AdminStore`, `eventbus.EventBus`.
 
 ### 8.19 Tests
 
-**RBAC** — tester `admin + users.read → ALLOW`, `admin + users.delete → ALLOW`, `viewer + users.read → ALLOW`, `viewer + users.delete → DENY`, un tenant sans rôle → `DENY`, plusieurs rôles → comportement correct, et surtout vérifier qu'un tenant ne récupère jamais les permissions d'un autre (tenant inconnu, rôle inconnu).
+**RBAC** — test `admin + users.read → ALLOW`, `admin + users.delete → ALLOW`, `viewer + users.read → ALLOW`, `viewer + users.delete → DENY`, a tenant with no role → `DENY`, several roles → correct behavior, and especially verify that a tenant never gets another's permissions (unknown tenant, unknown role).
 
-**Metrics** — vérifier qu'une requête incrémente le bon compteur, qu'un refus RBAC incrémente le compteur dédié, qu'un refus RateLimiter incrémente le sien. Pour Prometheus, vérifier également que les métriques produites sont correctement exposées dans le format attendu.
+**Metrics** — verify that a request increments the right counter, that an RBAC denial increments its dedicated counter, that a RateLimiter denial increments its own. For Prometheus, also verify that the metrics produced are correctly exposed in the expected format.
 
-### 8.20 Ce que cette étape apporte au toolkit
+### 8.20 What this step adds to the toolkit
 
 ```text
-Avant                          Après l'Étape 5
+Before                          After Step 5
 Toolkit                        Toolkit
    │                              │
    ├── Identification             ├── Identification (Resolver)
-   ├── Stockage                   ├── Isolation (Store, CacheKeyer, tenantctx)
-   ├── Cache                      ├── Sécurité (BanChecker, RateLimiter, RBAC)
-   ├── Bannissement               └── Observabilité (Metrics → Prometheus)
+   ├── Storage                    ├── Isolation (Store, CacheKeyer, tenantctx)
+   ├── Cache                      ├── Security (BanChecker, RateLimiter, RBAC)
+   ├── Ban                        └── Observability (Metrics → Prometheus)
    └── Rate limiting
 ```
 
-### 8.21 Principes architecturaux retenus
+### 8.21 Architectural principles adopted
 
-1. **RBAC ne connaît pas HTTP** — RBAC produit une décision d'autorisation ; HTTP la traduit en 403.
-2. **Metrics ne connaît pas le métier** — Metrics mesure ; Prometheus collecte.
-3. **Le cœur ne dépend pas de Prometheus** — `tenant → Metrics contract → Prometheus adapter`.
-4. **Le tenant reste la frontière d'isolation** — `TenantID → Store / RateLimiter / Cache / RBAC`.
-5. **Les interfaces restent minimales** — chaque composant expose uniquement ce dont son consommateur a besoin.
+1. **RBAC doesn't know HTTP** — RBAC produces an authorization decision; HTTP translates it into a 403.
+2. **Metrics doesn't know the business logic** — Metrics measures; Prometheus collects.
+3. **The core doesn't depend on Prometheus** — `tenant → Metrics contract → Prometheus adapter`.
+4. **The tenant remains the isolation boundary** — `TenantID → Store / RateLimiter / Cache / RBAC`.
+5. **Interfaces stay minimal** — each component exposes only what its consumer needs.
 
-### 8.22 Résumé de l'Étape 5
+### 8.22 Step 5 summary
 
-| Composant | Responsabilité |
+| Component | Responsibility |
 |---|---|
-| `RBAC` | Vérifier les permissions d'un tenant |
-| `Role` | Regrouper des permissions |
-| `Permission` | Représenter une capacité métier |
-| `Authorizer` / `Can` | Contrat d'autorisation |
-| `Metrics` / `MetricsCollector` | Contrat d'observabilité |
-| `MemoryMetrics` / `PrometheusMetrics` | Implémentations du contrat |
-| `Counter` | Compter les événements |
-| `Histogram` | Mesurer les durées/distributions |
-| `Gauge` | Mesurer une valeur variable |
+| `RBAC` | Check a tenant's permissions |
+| `Role` | Group permissions together |
+| `Permission` | Represent a business capability |
+| `Authorizer` / `Can` | Authorization contract |
+| `Metrics` / `MetricsCollector` | Observability contract |
+| `MemoryMetrics` / `PrometheusMetrics` | Contract implementations |
+| `Counter` | Count events |
+| `Histogram` | Measure durations/distributions |
+| `Gauge` | Measure a variable value |
 
-> **RBAC décide « qui peut faire quoi », tandis que Metrics permet de savoir « ce qui se passe réellement dans le système ».**
+> **RBAC decides "who can do what", while Metrics lets you know "what's actually happening in the system".**
 
-Progression cohérente des cinq premières étapes : identification → données → sécurité → protection des ressources → autorisation + observabilité.
+Coherent progression across the first five steps: identification → data → security → resource protection → authorization + observability.
 
 ---
 
-## 9. Étape 6 — Framework adapters
+## 9. Step 6 — Framework adapters
 
-### 9.1 Le problème à résoudre
+### 9.1 The problem to solve
 
-Le cœur `tenant-core` contient une logique indépendante du framework :
+The `tenant-core` core contains framework-independent logic:
 
 ```text
-Requête HTTP
+HTTP Request
      │
      ▼
-Identifier le tenant
+Identify the tenant
      │
      ▼
-Récupérer le tenant
+Retrieve the tenant
      │
      ▼
-Mettre le tenant dans le contexte
+Put the tenant in the context
      │
      ▼
-Handler de l'application
+Application handler
 ```
 
-Mais chaque framework Go construit ses middlewares différemment :
+But each Go framework builds its middlewares differently:
 
 ```text
 net/http    func(next http.Handler) http.Handler
@@ -2172,9 +2172,9 @@ Echo        func(next echo.HandlerFunc) echo.HandlerFunc
 Chi         func(next http.Handler) http.Handler
 ```
 
-L'objectif : ne surtout pas réécrire la logique multi-tenant quatre fois. D'où les **Framework Adapters**.
+The goal: above all, never rewrite the multi-tenant logic four times. Hence the **Framework Adapters**.
 
-### 9.2 Architecture générale
+### 9.2 General architecture
 
 ```text
                        ┌──────────────────────┐
@@ -2199,14 +2199,14 @@ L'objectif : ne surtout pas réécrire la logique multi-tenant quatre fois. D'o�
                               ▼
                     ┌──────────────────┐
                     │    Resolver      │
-                    │ "Quel tenant ?"  │
+                    │ "Which tenant?"  │
                     └────────┬─────────┘
                              │
                              ▼
                     ┌──────────────────┐
                     │      Store       │
-                    │ "Quel est son    │
-                    │      état ?"     │
+                    │ "What is its     │
+                    │      state?"     │
                     └────────┬─────────┘
                              │
                              ▼
@@ -2219,12 +2219,12 @@ L'objectif : ne surtout pas réécrire la logique multi-tenant quatre fois. D'o�
                        HTTP Request
                              │
                              ▼
-                     Handler métier
+                     Business handler
 ```
 
-> **Les frameworks sont à l'extérieur du cœur du toolkit. Le cœur ne connaît ni Gin, ni Echo, ni Chi.**
+> **Frameworks live outside the toolkit's core. The core knows neither Gin, Echo, nor Chi.**
 
-### 9.3 Le cœur : `tenant.Manager`
+### 9.3 The core: `tenant.Manager`
 
 ```go
 type Manager struct {
@@ -2251,21 +2251,21 @@ Store.Get()
 *Tenant
 ```
 
-Le `Manager` ne sait absolument pas si la requête vient de Gin, Echo, Chi ou `net/http` — et c'est **volontaire**.
+`Manager` has absolutely no idea whether the request comes from Gin, Echo, Chi, or `net/http` — and this is **deliberate**.
 
-**Note de conception importante** : `Manager.Resolve()` ne construit **pas** de `context.Context` lui-même. Faire dépendre `tenant.go` (package racine) de `tenantctx` créerait une dépendance circulaire (`tenant → tenantctx → tenant`, puisque `tenantctx` dépend déjà de `tenant` pour le type `*Tenant`). C'est donc la responsabilité de chaque adaptateur de framework de combiner `Manager.Resolve()` et `tenantctx.WithTenant()`.
+**Important design note**: `Manager.Resolve()` does **not** build a `context.Context` itself. Making `tenant.go` (root package) depend on `tenantctx` would create a circular dependency (`tenant → tenantctx → tenant`, since `tenantctx` already depends on `tenant` for the `*Tenant` type). It is therefore each framework adapter's responsibility to combine `Manager.Resolve()` and `tenantctx.WithTenant()`.
 
-**Fail-fast à la construction** : `tenant.New(options...)` panique si `Resolver` ou `Store` ne sont pas fournis après application des options — une dépendance obligatoire manquante est une erreur de configuration du programme, détectée immédiatement, pas une erreur de traitement de requête gérée via `error`.
+**Fail-fast at construction**: `tenant.New(options...)` panics if `Resolver` or `Store` are not provided after applying the options — a missing required dependency is a program configuration error, caught immediately, not a request-processing error handled via `error`.
 
-### 9.4 Le rôle de tenantctx
+### 9.4 The role of tenantctx
 
-Une fois que `Manager` fournit `*tenant.Tenant`, il faut transmettre cette information aux handlers via le `context.Context` standard :
+Once `Manager` provides `*tenant.Tenant`, this information needs to be passed to handlers via the standard `context.Context`:
 
 ```go
 ctx := tenantctx.WithTenant(r.Context(), t)
 ```
 
-Puis remplacer la requête avec ce nouveau contexte. Le handler peut ensuite faire :
+Then replace the request with this new context. The handler can then do:
 
 ```go
 t := tenantctx.FromContext(r.Context())
@@ -2274,17 +2274,17 @@ t := tenantctx.FromContext(r.Context())
 ```go
 func GetUsers(w http.ResponseWriter, r *http.Request) {
     t := tenantctx.FromContext(r.Context())
-    // utiliser t...
+    // use t...
 }
 ```
 
-Cette logique métier fonctionne identiquement derrière les quatre adaptateurs.
+This business logic works identically behind all four adapters.
 
-### 9.5 Adaptateur net/http
+### 9.5 net/http adapter
 
-**Fichier** : `middleware/nethttp.go`
+**File**: `middleware/nethttp.go`
 
-**Signature** : `func Wrap(m *tenant.Manager, next http.Handler) http.Handler`
+**Signature**: `func Wrap(m *tenant.Manager, next http.Handler) http.Handler`
 
 ```text
 Request
@@ -2292,7 +2292,7 @@ Request
    ▼
 m.Resolve(r)
    │
-   ├── erreur → HTTP 404
+   ├── error → HTTP 404
    │
    ▼
 Tenant
@@ -2307,22 +2307,22 @@ r.WithContext(...)
 next.ServeHTTP(...)
 ```
 
-**Code essentiel**
+**Essential code**
 
 ```go
 ctx := tenantctx.WithTenant(r.Context(), t)
 next.ServeHTTP(w, r.WithContext(ctx))
 ```
 
-C'est l'adaptateur de référence, utilisant directement les primitives HTTP standard de Go. Si `Manager.Resolve()` échoue, la requête est rejetée avec un statut `404` **avant** d'atteindre `next` — `next.ServeHTTP` n'est **jamais** appelé dans ce cas (comportement vérifié explicitement par test).
+This is the reference adapter, directly using Go's standard HTTP primitives. If `Manager.Resolve()` fails, the request is rejected with a `404` status **before** reaching `next` — `next.ServeHTTP` is **never** called in that case (behavior explicitly verified by a test).
 
-**Détail important : pourquoi `r.WithContext(ctx)`, pas `r` directement ?** `context.Context` est immuable en Go — `WithTenant()` crée un nouveau contexte, il ne modifie jamais l'ancien. De la même façon, `r.WithContext()` ne modifie pas `r` en place : elle retourne une **copie** de la requête portant le nouveau contexte. Sans cet appel, le handler suivant recevrait toujours l'ancien contexte (sans le tenant), et `tenantctx.FromContext` ne trouverait jamais rien.
+**Important detail: why `r.WithContext(ctx)`, not `r` directly?** `context.Context` is immutable in Go — `WithTenant()` creates a new context, it never modifies the old one. Likewise, `r.WithContext()` does not modify `r` in place: it returns a **copy** of the request carrying the new context. Without this call, the next handler would always receive the old context (without the tenant), and `tenantctx.FromContext` would never find anything.
 
-### 9.6 Adaptateur Gin
+### 9.6 Gin adapter
 
-**Fichier** : `middleware/gin/gin.go` — sous-module Go séparé (`go.mod` propre, dépendance `github.com/gin-gonic/gin`).
+**File**: `middleware/gin/gin.go` — separate Go sub-module (its own `go.mod`, dependency on `github.com/gin-gonic/gin`).
 
-Gin possède son propre `*gin.Context`, mais il contient toujours une requête HTTP standard accessible via `c.Request`.
+Gin has its own `*gin.Context`, but it always contains a standard HTTP request accessible via `c.Request`.
 
 ```go
 t, err := m.Resolve(c.Request)
@@ -2347,25 +2347,25 @@ Tenant
 tenantctx
      │
      ▼
-c.Request = nouvelle Request
+c.Request = new Request
      │
      ▼
 c.Next()
 ```
 
-En cas d'échec de résolution, `c.AbortWithStatus(http.StatusNotFound)` est utilisé — l'équivalent Gin de "ne jamais appeler le handler suivant".
+On a resolution failure, `c.AbortWithStatus(http.StatusNotFound)` is used — Gin's equivalent of "never call the next handler".
 
-**Pourquoi ne pas utiliser `c.Set("tenant", t)` ?** Cela créerait un mécanisme de propagation spécifique à Gin. Le choix retenu (`tenantctx.WithTenant`) garantit que le tenant reste accessible avec la **même API partout**, quel que soit le framework — cohérence transversale essentielle pour un toolkit destiné à des milliers de développeurs sur des stacks différentes.
+**Why not use `c.Set("tenant", t)`?** That would create a propagation mechanism specific to Gin. The choice adopted (`tenantctx.WithTenant`) guarantees that the tenant stays accessible with the **same API everywhere**, regardless of the framework — essential cross-cutting consistency for a toolkit meant for thousands of developers across different stacks.
 
-**Note de setup** : le sous-module `middleware/gin` utilise une directive `replace github.com/sylvinhio676-ux/tenant-core => ../..` dans son `go.mod`, pour pointer vers le code local pendant le développement (avant que le module racine n'ait de version taguée publiée). Cette directive devra être retirée au moment de la publication d'une version stable, pour que les utilisateurs récupèrent la vraie dépendance depuis le dépôt public.
+**Setup note**: the `middleware/gin` sub-module uses a `replace github.com/sylvinhio676-ux/tenant-core => ../..` directive in its `go.mod`, to point at the local code during development (before the root module has a published tagged version). This directive will need to be removed once a stable version is published, so users pull the real dependency from the public repository.
 
-### 9.7 Adaptateur Echo
+### 9.7 Echo adapter
 
-**Fichier** : `middleware/echo/echo.go` — sous-module Go séparé (dépendance `github.com/labstack/echo/v4`).
+**File**: `middleware/echo/echo.go` — separate Go sub-module (dependency on `github.com/labstack/echo/v4`).
 
-Echo possède `echo.Context`, mais la requête HTTP est obtenue via une **méthode**, `c.Request()`, pas un champ direct.
+Echo has `echo.Context`, but the HTTP request is obtained via a **method**, `c.Request()`, not a direct field.
 
-**Signature** : `func Middleware(m *tenant.Manager) echo.MiddlewareFunc`
+**Signature**: `func Middleware(m *tenant.Manager) echo.MiddlewareFunc`
 
 ```text
 echo.Context
@@ -2392,23 +2392,23 @@ c.SetRequest(...)
 next(c)
 ```
 
-**Détail important** : `c.SetRequest(c.Request().WithContext(ctx))`. Contrairement à Gin, on ne peut pas simplement faire `c.Request = ...` — Echo expose la requête via une méthode d'accès, pas un champ public.
+**Important detail**: `c.SetRequest(c.Request().WithContext(ctx))`. Unlike Gin, you can't simply do `c.Request = ...` — Echo exposes the request via an accessor method, not a public field.
 
-**Gestion des erreurs** : Echo propage les erreurs par le retour `error` de chaque handler, pas en écrivant directement sur le `ResponseWriter` :
+**Error handling**: Echo propagates errors through each handler's `error` return value, not by writing directly to the `ResponseWriter`:
 
 ```go
 return echo.NewHTTPError(http.StatusNotFound, "tenant not found")
 ```
 
-Pour arrêter la chaîne de middlewares en cas de rejet, `c.Next()` n'est simplement jamais atteint — la fonction retourne l'erreur avant.
+To stop the middleware chain on rejection, `c.Next()` (well, `next(c)`) is simply never reached — the function returns the error before that.
 
-### 9.8 Adaptateur Chi
+### 9.8 Chi adapter
 
-**Fichier** : `middleware/chi/chi.go` — sous-module Go séparé (dépendance `github.com/go-chi/chi/v5`).
+**File**: `middleware/chi/chi.go` — separate Go sub-module (dependency on `github.com/go-chi/chi/v5`).
 
-Chi est le plus proche de `net/http` : il consomme directement `http.Handler`, sans type de contexte propre.
+Chi is the closest to `net/http`: it consumes `http.Handler` directly, with no context type of its own.
 
-**Signature** : `func Middleware(m *tenant.Manager) func(http.Handler) http.Handler`
+**Signature**: `func Middleware(m *tenant.Manager) func(http.Handler) http.Handler`
 
 ```text
 http.Request
@@ -2429,7 +2429,7 @@ r.WithContext()
 next.ServeHTTP()
 ```
 
-**Code essentiel**
+**Essential code**
 
 ```go
 ctx := tenantctx.WithTenant(r.Context(), t)
@@ -2437,18 +2437,18 @@ r = r.WithContext(ctx)
 next.ServeHTTP(w, r)
 ```
 
-C'est parce que Chi repose directement sur `http.Handler` qu'il n'a besoin d'aucun système de contexte supplémentaire — le code est quasiment identique à l'adaptateur `net/http`.
+Because Chi relies directly on `http.Handler`, it needs no extra context system — the code is nearly identical to the `net/http` adapter.
 
-### 9.9 Comparaison des quatre adaptateurs
+### 9.9 Comparing the four adapters
 
-| Framework | Accès à la requête | Injection | Continuer |
+| Framework | Request access | Injection | Continue |
 |---|---|---|---|
 | `net/http` | `r` | `r.WithContext()` | `next.ServeHTTP()` |
 | Gin | `c.Request` | `c.Request.WithContext()` | `c.Next()` |
 | Echo | `c.Request()` | `c.SetRequest()` | `next(c)` |
 | Chi | `r` | `r.WithContext()` | `next.ServeHTTP()` |
 
-Malgré ces différences syntaxiques, le résultat architectural est identique :
+Despite these syntactic differences, the architectural outcome is identical:
 
 ```text
                  ┌───────────────────────┐
@@ -2462,13 +2462,13 @@ Malgré ces différences syntaxiques, le résultat architectural est identique :
                   tenantctx.WithTenant()
                              │
                              ▼
-                     nouveau Context
+                     new Context
                              │
                              ▼
-                      Handler suivant
+                      Next handler
 ```
 
-### 9.10 Pourquoi quatre adaptateurs
+### 9.10 Why four adapters
 
 ```go
 // Gin
@@ -2480,41 +2480,41 @@ e.Use(echo.Middleware(manager))
 // Chi
 r.Use(chi.Middleware(manager))
 
-// net/http seul
+// net/http alone
 handler := nethttp.Wrap(manager, myHandler)
 ```
 
-La logique métier du toolkit ne change jamais. C'est exactement le rôle d'un *adapter* : traduire l'interface spécifique d'un framework vers l'interface générique du cœur.
+The toolkit's business logic never changes. This is exactly the role of an *adapter*: translate a framework's specific interface into the core's generic interface.
 
-### 9.11 Ce que les adapters ne font PAS
+### 9.11 What adapters do NOT do
 
-C'est une limite volontairement stricte, documentée pour éviter toute dérive future :
+This is a deliberately strict boundary, documented to prevent future drift:
 
-- ❌ déterminer comment fonctionne un tenant
-- ❌ interroger directement la base de données
-- ❌ vérifier les rôles RBAC
-- ❌ appliquer le RateLimiter
-- ❌ gérer les métriques
-- ❌ gérer les bannissements directement
-- ❌ connaître la logique métier
+- ❌ decide how a tenant works
+- ❌ query the database directly
+- ❌ check RBAC roles
+- ❌ apply the RateLimiter
+- ❌ handle metrics
+- ❌ handle bans directly
+- ❌ know the business logic
 
-Un adaptateur fait exclusivement :
+An adapter exclusively does:
 
 ```text
 Framework
     ↓
-extraire *http.Request
+extract *http.Request
     ↓
 Manager.Resolve()
     ↓
-injecter Tenant dans Context
+inject Tenant into Context
     ↓
 Framework
 ```
 
-Rien de plus.
+Nothing more.
 
-### 9.12 Architecture complète du toolkit après l'Étape 6
+### 9.12 Complete toolkit architecture after Step 6
 
 ```text
                          ┌─────────────────────┐
@@ -2543,7 +2543,7 @@ Rien de plus.
                               tenantctx
                                     │
                                     ▼
-                            Handler métier
+                            Business handler
                                     │
                ┌────────────────────┼──────────────────┐
                │                    │                  │
@@ -2572,24 +2572,24 @@ Rien de plus.
                 Tenant Context
 ```
 
-> **Le cœur de notre toolkit parle en abstractions Go (Manager, Resolver, Store, context.Context). Les framework adapters traduisent simplement les conventions de chaque framework vers ces abstractions. C'est ce qui permet à notre code multi-tenant d'être indépendant du framework tout en restant très facile à intégrer.**
+> **The core of our toolkit speaks in Go abstractions (Manager, Resolver, Store, context.Context). The framework adapters simply translate each framework's conventions into these abstractions. This is what lets our multi-tenant code stay framework-independent while remaining very easy to integrate.**
 
 ---
 
-## 10. Étape 7 — Admin API et EventBus Redis
+## 10. Step 7 — Admin API and Redis EventBus
 
-L'objectif de cette étape était double : **l'administration des tenants** via une API HTTP, et **la propagation inter-instance**, pour qu'un changement de tenant (notamment un bannissement) soit immédiatement connu par toutes les instances du serveur grâce à Redis Pub/Sub.
+This step had a dual goal: **tenant administration** via an HTTP API, and **cross-instance propagation**, so that a tenant change (notably a ban) is immediately known by every server instance thanks to Redis Pub/Sub.
 
-> **Le cœur métier ne connaît ni HTTP, ni Redis, ni framework particulier. Les adaptateurs dépendent du cœur, jamais l'inverse.**
+> **The business core knows neither HTTP, nor Redis, nor any particular framework. Adapters depend on the core, never the other way around.**
 
-### 10.1 Architecture globale de l'étape
+### 10.1 Overall architecture of this step
 
 ```text
                          APPLICATION
                               │
                     ┌─────────┴─────────┐
                     │                   │
-              Admin API             Requête normale
+              Admin API             Normal request
                     │                   │
                     ▼                   ▼
              admin.HTTPHandler      Manager.Resolve()
@@ -2616,11 +2616,11 @@ L'objectif de cette étape était double : **l'administration des tenants** via 
          BanChecker    BanChecker    BanChecker
 ```
 
-`admin.Service` ne sait pas qu'il utilise Redis — il connaît seulement `eventbus.EventBus`. De même, il ne connaît pas `MemoryStore` ni une base SQL particulière — il connaît `tenant.AdminStore`.
+`admin.Service` doesn't know it uses Redis — it only knows `eventbus.EventBus`. Similarly, it doesn't know about `MemoryStore` or any particular SQL database — it knows `tenant.AdminStore`.
 
-### 10.2 Extension de tenant.Store — pourquoi une interface séparée
+### 10.2 Extending tenant.Store — why a separate interface
 
-L'interface `Store` existante, dédiée au chemin de lecture normal :
+The existing `Store` interface, dedicated to the normal read path:
 
 ```go
 type Store interface {
@@ -2629,7 +2629,7 @@ type Store interface {
 }
 ```
 
-... n'a **pas** été enrichie avec des opérations d'administration. À la place :
+... was **not** enriched with administration operations. Instead:
 
 ```go
 type AdminStore interface {
@@ -2639,38 +2639,38 @@ type AdminStore interface {
 }
 ```
 
-**Pourquoi ?** Parce que le principe des interfaces minimales devait être respecté : `Manager` n'a absolument pas besoin de pouvoir bannir un tenant, il ne doit donc pas dépendre d'une interface contenant `Ban()`/`Disable()`/`Activate()`. Cela évite de transformer progressivement `Store` en une énorme interface CRUD.
+**Why?** Because the minimal-interfaces principle had to be respected: `Manager` has absolutely no need to be able to ban a tenant, so it must not depend on an interface containing `Ban()`/`Disable()`/`Activate()`. This avoids progressively turning `Store` into one giant CRUD interface.
 
-### 10.3 AdminStore : pourquoi pas `Ban()` / `Disable()` / `Activate()` directement
+### 10.3 AdminStore: why not `Ban()` / `Disable()` / `Activate()` directly
 
-`AdminStore` expose volontairement seulement `Create`, `Update`, `SetState` — jamais `Ban()`, `Disable()`, `Activate()` directement, parce que ces opérations ne sont pas de simples modifications locales : un bannissement doit **aussi** produire un événement.
+`AdminStore` deliberately only exposes `Create`, `Update`, `SetState` — never `Ban()`, `Disable()`, `Activate()` directly, because these operations are not simple local modifications: a ban must **also** produce an event.
 
 ```text
 Tenant A
    │
-   ├── état local → Banned
+   ├── local state → Banned
    │
-   └── événement → TenantEvent
+   └── event → TenantEvent
 ```
 
-Si `AdminStore` possédait `Ban()`, un développeur pourrait appeler `store.Ban(ctx, id)` et **oublier** de publier l'événement, créant une incohérence :
+If `AdminStore` had `Ban()`, a developer could call `store.Ban(ctx, id)` and **forget** to publish the event, creating an inconsistency:
 
 ```text
-Instance A: Tenant = BANNED     ❌ événement non publié
+Instance A: Tenant = BANNED     ❌ event not published
 Instance B: Tenant = ACTIVE
 ```
 
-C'est précisément le problème de cohérence que l'architecture voulait éviter — la publication de l'événement ne doit jamais être une étape optionnelle laissée à la discrétion de l'appelant.
+That is precisely the consistency problem the architecture wanted to avoid — publishing the event must never be an optional step left to the caller's discretion.
 
-### 10.4 MemoryStore et le problème des pointeurs (rappel détaillé)
+### 10.4 MemoryStore and the pointer problem (detailed reminder)
 
-Ce problème a été identifié précisément lors de l'ajout de `SetState`, et déjà documenté à l'Étape 2 (section 5.6) — reformulé ici avec le cas d'usage spécifique de `SetState` :
+This problem was identified precisely while adding `SetState`, and was already documented in Step 2 (section 5.6) — restated here with the specific use case of `SetState`:
 
 ```text
 map[TenantID]*Tenant
 ```
 
-Lorsque `t, _ := store.Get(...)` retourne `*Tenant`, ce pointeur correspond au **même objet** que celui présent dans la map — ce n'est pas une copie. Faire `t.State = tenant.Banned` hors verrou peut provoquer :
+When `t, _ := store.Get(...)` returns `*Tenant`, that pointer refers to the **same object** present in the map — it's not a copy. Doing `t.State = tenant.Banned` outside the lock can trigger:
 
 ```text
 Goroutine A                 Goroutine B
@@ -2680,16 +2680,16 @@ t.State = Banned
        │                 Get()
        │                   │
        ▼                   ▼
-   écriture              lecture
+   write                 read
 ```
 
-... une data race authentique.
+... a genuine data race.
 
-> **Protéger uniquement la map n'est pas suffisant lorsque les valeurs de la map sont des pointeurs mutables.**
+> **Protecting only the map is not enough when the map's values are mutable pointers.**
 
-Les opérations de modification restent donc correctement protégées par le mécanisme de synchronisation du store : `Get()` retourne une copie, `SetState`/`Create`/`Update` opèrent directement sur l'objet interne sous `Lock()` exclusif.
+Write operations therefore remain properly protected by the store's synchronization mechanism: `Get()` returns a copy, `SetState`/`Create`/`Update` operate directly on the internal object under an exclusive `Lock()`.
 
-### 10.5 admin.Service : le cœur métier de l'administration
+### 10.5 admin.Service: the business core of administration
 
 ```text
 admin/
@@ -2705,24 +2705,24 @@ type Service struct {
 }
 ```
 
-Seulement deux dépendances obligatoires. Constructeur simple, sans options fonctionnelles :
+Only two required dependencies. Simple constructor, no functional options:
 
 ```go
 func NewAdminService(store tenant.AdminStore, bus eventbus.EventBus) *Service
 ```
 
-**Pourquoi pas d'options fonctionnelles ici, contrairement à `Manager` ?** `Service` possède seulement deux dépendances obligatoires et aucune configuration optionnelle prévue. `NewAdminService(store, bus)` est plus simple et plus lisible que `NewAdminService(WithStore(...), WithEventBus(...))` pour un si petit nombre de paramètres fixes — le pattern d'options fonctionnelles n'est utile que lorsqu'il apporte une réelle valeur d'extensibilité, pas par réflexe systématique.
+**Why no functional options here, unlike `Manager`?** `Service` only has two required dependencies and no planned optional configuration. `NewAdminService(store, bus)` is simpler and more readable than `NewAdminService(WithStore(...), WithEventBus(...))` for such a small, fixed number of parameters — the functional-options pattern is only useful when it brings genuine extensibility value, not as a systematic reflex.
 
-### 10.6 La méthode `transition()`
+### 10.6 The `transition()` method
 
-`Ban()`, `Disable()`, `Activate()` partagent exactement le même mécanisme :
+`Ban()`, `Disable()`, `Activate()` share exactly the same mechanism:
 
-1. modifier l'état ;
-2. construire `TenantEvent` ;
-3. publier l'événement ;
-4. logger si la publication échoue.
+1. change the state;
+2. build the `TenantEvent`;
+3. publish the event;
+4. log if publication fails.
 
-Plutôt que dupliquer cette logique trois fois, une méthode privée commune la factorise :
+Rather than duplicating this logic three times, a common private method factors it out:
 
 ```go
 func (s *Service) transition(ctx context.Context, id tenant.TenantID, state tenant.State) error
@@ -2742,9 +2742,9 @@ func (s *Service) Activate(...) error {
 }
 ```
 
-> **Une seule implémentation de la logique commune, plusieurs opérations métier explicites.** Cela garantit aussi que le comportement (y compris le logging en cas d'échec) reste identique pour les trois transitions, sans risque de divergence accidentelle.
+> **A single implementation of the shared logic, several explicit business operations.** This also guarantees that behavior (including logging on failure) stays identical across the three transitions, with no risk of accidental divergence.
 
-### 10.7 Le flux d'un bannissement
+### 10.7 The flow of a ban
 
 ```text
 service.Ban(ctx, "tenant-A")
@@ -2761,13 +2761,13 @@ service.Ban(ctx, "tenant-A")
                  State = Banned
                          │
                          ▼
-              création TenantEvent
+              create TenantEvent
                          │
                          ▼
                 EventBus.Publish()
                          │
                          ▼
-                propagation événement
+                event propagation
 ```
 
 ```go
@@ -2778,33 +2778,33 @@ eventbus.TenantEvent{
 }
 ```
 
-### 10.8 Pourquoi SetState → Publish (et pas l'inverse)
+### 10.8 Why SetState → Publish (and not the reverse)
 
-**Décision d'architecture, non-atomicité assumée.**
-
-```text
-SetState() → succès
-Publish()  → échec
-```
-
-L'état local devient `BANNED`, mais les autres instances ne reçoivent pas l'événement — une incohérence, mais **acceptée** pour cette version.
-
-**Pourquoi pas `Publish → SetState` ?** Parce qu'on pourrait alors publier `Tenant A → BANNED` alors que `SetState()` échoue ensuite — l'événement annoncerait un état qui n'existe finalement jamais dans le Store. C'est strictement pire : un **événement mensonger**.
-
-**Décision retenue** : `SetState → Publish`, avec une limite explicitement documentée dans le code lui-même :
+**Architectural decision, non-atomicity accepted.**
 
 ```text
-// Limite connue : SetState et Publish ne sont pas atomiques entre eux (ce
-// sont deux systèmes distincts). L'ordre SetState → Publish garantit qu'on
-// ne publie jamais un événement pour un état qui n'a pas réellement été
-// appliqué au Store — mais si Publish échoue après un SetState réussi,
-// l'événement peut être perdu jusqu'à resynchronisation manuelle ou via un
-// futur mécanisme de livraison durable (pattern Outbox).
+SetState() → success
+Publish()  → failure
 ```
 
-### 10.9 Logging de l'incohérence
+The local state becomes `BANNED`, but other instances don't receive the event — an inconsistency, but **accepted** for this version.
 
-Lorsque `SetState()` réussit mais que `Publish()` échoue, le service **loggue explicitement** l'anomalie, avec le contexte complet (tenant concerné, état visé, erreur rencontrée) :
+**Why not `Publish → SetState`?** Because then `Tenant A → BANNED` could be published while `SetState()` subsequently fails — the event would announce a state that ultimately never exists in the Store. That is strictly worse: a **lying event**.
+
+**Decision adopted**: `SetState → Publish`, with a limitation explicitly documented right in the code itself:
+
+```text
+// Known limitation: SetState and Publish are not atomic with each other (they
+// are two distinct systems). The order SetState → Publish guarantees that we
+// never publish an event for a state that was not actually
+// applied to the Store — but if Publish fails after a successful SetState,
+// the event may be lost until manual resynchronization or a
+// future durable-delivery mechanism (Outbox pattern).
+```
+
+### 10.9 Logging the inconsistency
+
+When `SetState()` succeeds but `Publish()` fails, the service **explicitly logs** the anomaly, with full context (the tenant involved, the target state, the error encountered):
 
 ```text
 ERROR
@@ -2812,13 +2812,13 @@ tenant state changed but event publication failed
 tenant_id=tenant-A state=banned error=redis connection refused
 ```
 
-Cela permet à un opérateur de savoir : ⚠ état local modifié, ⚠ événement non propagé, ⚠ resynchronisation potentiellement nécessaire.
+This lets an operator know: ⚠ local state changed, ⚠ event not propagated, ⚠ resynchronization potentially needed.
 
-**Nuance importante retenue** : le log ne remplace jamais l'erreur retournée à l'appelant — les deux sont faits, parce que l'appelant seul (recevant juste une erreur Redis générique) ne saurait pas forcément qu'une opération métier a *partiellement* réussi (le Store a bien été modifié), une information que seul le `Service` connaît.
+**Important nuance adopted**: the log never replaces the error returned to the caller — both are done, because the caller alone (receiving just a generic Redis error) wouldn't necessarily know that a business operation *partially* succeeded (the Store was indeed modified) — information only the `Service` has.
 
-**Évolution future identifiée** : un pattern **Outbox** (changement d'état et événement à publier écrits dans la même transaction de stockage, avec un *worker* asynchrone chargé de la publication effective et retentant en cas d'échec) rendrait la publication durable. Ce mécanisme n'a volontairement **pas** été construit à cette étape.
+**Future evolution identified**: an **Outbox** pattern (state change and event-to-publish written in the same storage transaction, with an asynchronous *worker* responsible for actual publication and retrying on failure) would make publication durable. This mechanism was deliberately **not** built at this step.
 
-### 10.10 Admin API — couche HTTP
+### 10.10 Admin API — HTTP layer
 
 ```go
 type HTTPHandler struct {
@@ -2827,11 +2827,11 @@ type HTTPHandler struct {
 }
 ```
 
-**Choix architectural important : `net/http` pur, ni Gin, ni Echo, ni Chi.**
+**Important architectural choice: pure `net/http`, neither Gin, Echo, nor Chi.**
 
-**Pourquoi ?** Parce que l'Admin API est une **API de commande** du toolkit, pas un middleware destiné à être branché dans différents frameworks applicatifs. Elle reste donc indépendante du framework utilisé par l'application qui consomme le toolkit — n'importe quel serveur Go capable de monter un `http.Handler` peut l'intégrer, quel que soit son propre choix de framework pour le reste de l'application.
+**Why?** Because the Admin API is a **command API** for the toolkit, not a middleware meant to be plugged into different application frameworks. It therefore stays independent from whatever framework is used by the application consuming the toolkit — any Go server able to mount an `http.Handler` can integrate it, regardless of its own framework choice for the rest of the application.
 
-### 10.11 Routage moderne avec `http.ServeMux` (Go 1.22+)
+### 10.11 Modern routing with `http.ServeMux` (Go 1.22+)
 
 ```go
 h.mux.HandleFunc("PATCH /tenants/{id}/ban", h.handleBan)
@@ -2839,7 +2839,7 @@ h.mux.HandleFunc("PATCH /tenants/{id}/disable", h.handleDisable)
 h.mux.HandleFunc("PATCH /tenants/{id}/activate", h.handleActivate)
 ```
 
-Grâce au support des patterns modernes de `ServeMux` (méthodes HTTP + wildcards), le handler récupère directement :
+Thanks to `ServeMux`'s modern pattern support (HTTP methods + wildcards), the handler retrieves directly:
 
 ```go
 id := r.PathValue("id")
@@ -2855,19 +2855,19 @@ PATCH /tenants/tenant-A/ban
              tenant-A
 ```
 
-Cela évite un parsing manuel (`strings.Split`, `strings.TrimPrefix`, `switch`), réduisant le risque de reconstruire progressivement un mini-router maison.
+This avoids manual parsing (`strings.Split`, `strings.TrimPrefix`, `switch`), reducing the risk of progressively rebuilding a homemade mini-router.
 
-### 10.12 Pourquoi seulement trois endpoints
+### 10.12 Why only three endpoints
 
-Volontairement, **pas** de `POST /tenants` ni `GET /tenants/{id}`, même si `AdminStore` possède `Create()` et `Store` possède `Get()`.
+Deliberately, **no** `POST /tenants` nor `GET /tenants/{id}`, even though `AdminStore` has `Create()` and `Store` has `Get()`.
 
-> **L'API HTTP doit suivre le contrat métier du Service, pas exposer automatiquement toutes les méthodes du Store.**
+> **The HTTP API must follow the Service's business contract, not automatically expose every Store method.**
 
-Actuellement, `Service` n'expose que `Ban()`, `Disable()`, `Activate()` — donc l'API expose exactement `PATCH /tenants/{id}/ban`, `/disable`, `/activate`, pas un CRUD générique. Cela protège l'architecture contre une dérive du type *« Store → toutes les méthodes → endpoints HTTP »*.
+Currently, `Service` only exposes `Ban()`, `Disable()`, `Activate()` — so the API exposes exactly `PATCH /tenants/{id}/ban`, `/disable`, `/activate`, not a generic CRUD. This protects the architecture against a *"Store → all methods → HTTP endpoints"* kind of drift.
 
-Si la création ou la lecture doivent un jour faire partie de l'Admin API, la démarche à suivre est d'abord d'enrichir le contrat métier (`Service.Create(...)`, `Service.Get(...)`), **puis seulement** d'exposer les endpoints correspondants — jamais l'inverse.
+If creation or reading should one day be part of the Admin API, the approach is to first enrich the business contract (`Service.Create(...)`, `Service.Get(...)`), **and only then** expose the corresponding endpoints — never the other way around.
 
-### 10.13 Architecture de l'Admin API — flux complet
+### 10.13 Admin API architecture — full flow
 
 ```text
 HTTP
@@ -2891,27 +2891,27 @@ State=Banned   TenantEvent
              propagation
 ```
 
-Le `HTTPHandler` ne connaît ni Redis, ni `MemoryStore`, ni la façon dont l'état est stocké, ni la façon dont les événements sont transportés.
+The `HTTPHandler` knows nothing about Redis, `MemoryStore`, how the state is stored, or how events are transported.
 
-### 10.14 Limites actuelles de l'Admin API (documentées honnêtement)
+### 10.14 Current limitations of the Admin API (honestly documented)
 
-**Authentification** — l'API n'a actuellement **aucune** authentification ni autorisation. Elle ne doit donc pas être exposée directement à Internet en production. Un point critique à traiter ultérieurement.
+**Authentication** — the API currently has **no** authentication or authorization at all. It must therefore not be exposed directly to the Internet in production. A critical point to address later.
 
-**Gestion des erreurs** — `writeError(...)` renvoie systématiquement `500 Internal Server Error`, peu importe la vraie cause (tenant introuvable, store indisponible, etc.). Une évolution future devra distinguer `404` (tenant absent), `500` (erreur interne), `503` (dépendance indisponible). Cette limite vient notamment du fait qu'il n'existe pas encore d'erreur sentinelle exportée pour "tenant introuvable" au niveau de l'interface générique `AdminStore` — contrairement à `store.ErrTenantNotFound`, qui est spécifique à `MemoryStore`.
+**Error handling** — `writeError(...)` systematically returns `500 Internal Server Error`, regardless of the actual cause (tenant not found, store unavailable, etc.). A future evolution should distinguish `404` (tenant absent), `500` (internal error), `503` (dependency unavailable). This limitation notably stems from the fact that there is not yet an exported sentinel error for "tenant not found" at the level of the generic `AdminStore` interface — unlike `store.ErrTenantNotFound`, which is specific to `MemoryStore`.
 
-### 10.15 Pourquoi Redis
+### 10.15 Why Redis
 
-Jusqu'ici, `MemoryEventBus` fonctionne très bien en mono-instance :
+So far, `MemoryEventBus` works very well in a single instance:
 
 ```text
 Instance A
    │
 MemoryEventBus
    │
-handlers locaux
+local handlers
 ```
 
-Mais avec plusieurs instances, chacune possède sa propre mémoire :
+But with several instances, each has its own memory:
 
 ```text
 Instance A
@@ -2920,10 +2920,10 @@ Ban tenant-A
    │
 MemoryEventBus
    │
-   └── uniquement A
+   └── only A
 ```
 
-B et C ne voient rien.
+B and C see nothing.
 
 ### 10.16 Redis Pub/Sub — RedisEventBus
 
@@ -2932,21 +2932,21 @@ eventbus/redis/
 └── redis.go
 ```
 
-Utilise `github.com/redis/go-redis/v9`. Le package `eventbus` lui-même ne connaît **jamais** Redis — règle architecturale essentielle :
+Uses `github.com/redis/go-redis/v9`. The `eventbus` package itself **never** knows about Redis — an essential architectural rule:
 
 ```text
 eventbus
    │
-   │ définit
+   │ defines
    ▼
 EventBus interface
    ▲
-   │ implémente
+   │ implements
    │
 eventbus/redis
 ```
 
-Grâce au typage structurel de Go, `RedisEventBus` satisfait automatiquement `eventbus.EventBus`.
+Thanks to Go's structural typing, `RedisEventBus` automatically satisfies `eventbus.EventBus`.
 
 ```go
 type RedisEventBus struct {
@@ -2961,13 +2961,13 @@ RedisEventBus
 └── Redis Channel
 ```
 
-**Note de setup** : sous-module Go séparé (`eventbus/redis/go.mod`), avec la même directive `replace` locale que les adaptateurs de framework, pour les mêmes raisons.
+**Setup note**: a separate Go sub-module (`eventbus/redis/go.mod`), with the same local `replace` directive as the framework adapters, for the same reasons.
 
-### 10.17 Transformation TenantEvent ↔ JSON
+### 10.17 TenantEvent ↔ JSON transformation
 
-Redis ne connaît pas `eventbus.TenantEvent` — il transporte des bytes/messages bruts. JSON a été retenu.
+Redis doesn't know `eventbus.TenantEvent` — it carries raw bytes/messages. JSON was chosen.
 
-**Publication**
+**Publishing**
 
 ```text
 TenantEvent
@@ -2990,12 +2990,12 @@ Redis PUBLISH
 }
 ```
 
-**Réception**
+**Receiving**
 
 ```text
 Redis
  │
- │ message JSON
+ │ JSON message
  ▼
 RedisEventBus
  │
@@ -3009,7 +3009,7 @@ TenantEvent
 handler(event)
 ```
 
-Transformation symétrique :
+Symmetric transformation:
 
 ```text
              Publish
@@ -3020,11 +3020,11 @@ TenantEvent ←────── JSON ←───────────┘
              Subscribe
 ```
 
-**Pourquoi JSON** : standard, lisible, simple, indépendant du langage, directement supporté par la stdlib Go.
+**Why JSON**: standard, readable, simple, language-independent, directly supported by the Go standard library.
 
-### 10.18 Subscribe() et la goroutine dédiée
+### 10.18 Subscribe() and the dedicated goroutine
 
-Le Pub/Sub Redis fonctionne avec un abonnement **continu** :
+Redis Pub/Sub works with a **continuous** subscription:
 
 ```go
 for msg := range pubsub.Channel() {
@@ -3032,20 +3032,20 @@ for msg := range pubsub.Channel() {
 }
 ```
 
-Cette boucle peut vivre pendant toute la durée du serveur. Si elle était exécutée directement dans `Subscribe()`, la fonction ne retournerait jamais, bloquant tout le code appelant :
+This loop can live for the entire lifetime of the server. If it ran directly inside `Subscribe()`, the function would never return, blocking all calling code:
 
 ```text
 Subscribe()
    │
    ▼
-boucle infinie
+infinite loop
    │
-   ├── ne retourne jamais
+   ├── never returns
    │
-   └── code appelant bloqué
+   └── calling code blocked
 ```
 
-**Solution retenue** :
+**Solution adopted**:
 
 ```text
 Subscribe()
@@ -3054,17 +3054,17 @@ Subscribe()
    │
    ├── confirmation
    │
-   └── lancement goroutine
+   └── launch goroutine
              │
              ▼
-       boucle de lecture
+       reading loop
 ```
 
-La boucle de réception vit dans une goroutine dédiée, unique et permanente — distincte des goroutines lancées ensuite pour chaque handler individuel (voir 10.19).
+The receiving loop lives in a single, dedicated, permanent goroutine — distinct from the goroutines then launched for each individual handler (see 10.19).
 
-### 10.19 Confirmation synchrone avec `pubsub.Receive()` — fail-fast
+### 10.19 Synchronous confirmation with `pubsub.Receive()` — fail-fast
 
-Simplement faire `pubsub := client.Subscribe(...)` ne garantit **pas** immédiatement que Redis a confirmé l'abonnement (opération asynchrone côté connexion). `pubsub.Receive(ctx)` est utilisé **avant** de lancer la goroutine de traitement, pour bloquer jusqu'à confirmation, ou remonter une erreur concrète si Redis est injoignable :
+Simply doing `pubsub := client.Subscribe(...)` does **not** immediately guarantee that Redis has confirmed the subscription (an asynchronous operation on the connection side). `pubsub.Receive(ctx)` is used **before** launching the processing goroutine, to block until confirmation, or surface a concrete error if Redis is unreachable:
 
 ```text
 Subscribe()
@@ -3075,7 +3075,7 @@ Redis SUBSCRIBE
     ▼
 Receive()
     │
-    ├── erreur → Subscribe retourne error
+    ├── error → Subscribe returns error
     │
     └── confirmation
            │
@@ -3086,14 +3086,14 @@ Receive()
        messages
 ```
 
-Cela respecte le principe de **fail-fast** sur les erreurs de configuration : un développeur qui configure mal Redis (mauvaise adresse, credentials invalides) le découvre immédiatement au démarrage de son serveur, plutôt que silencieusement en production, des heures plus tard.
+This follows the **fail-fast** principle for configuration errors: a developer who misconfigures Redis (wrong address, invalid credentials) discovers it immediately when their server starts, rather than silently in production, hours later.
 
-### 10.20 Protection contre les handlers qui paniquent (rappel + application à Redis)
+### 10.20 Protection against panicking handlers (reminder + application to Redis)
 
-Même comportement que `MemoryEventBus` (Étape 3) : chaque événement reçu est traité dans sa propre goroutine, protégée par `recover()` :
+Same behavior as `MemoryEventBus` (Step 3): each received event is handled in its own goroutine, protected by `recover()`:
 
 ```text
-message Redis
+Redis message
       │
       ▼
 JSON decode
@@ -3115,27 +3115,27 @@ func safeCall(handler func(TenantEvent), event TenantEvent) {
 
 ```text
 Handler A → panic → recover()
-Handler B → continue normalement
-Handler C → continue normalement
+Handler B → continues normally
+Handler C → continues normally
 ```
 
-Un handler défaillant ne doit jamais faire tomber le processus.
+A failing handler must never bring down the process.
 
-### 10.21 Message Redis malformé
+### 10.21 Malformed Redis message
 
-Si `json.Unmarshal(...)` échoue, le message invalide est loggé puis **ignoré**, sans `panic(...)` ni `return` qui arrêterait toute la consommation :
+If `json.Unmarshal(...)` fails, the invalid message is logged then **ignored**, with no `panic(...)` or `return` that would stop all consumption:
 
 ```text
-message invalide
+invalid message
       │
       ▼
-log erreur
+log error
       │
       ▼
 continue
 ```
 
-### 10.22 Architecture multi-instance finale
+### 10.22 Final multi-instance architecture
 
 ```text
                  Redis
@@ -3151,7 +3151,7 @@ continue
  BanChecker   BanChecker   BanChecker
 ```
 
-Un bannissement effectué sur l'instance A se propage à toutes les autres :
+A ban performed on instance A propagates to all others:
 
 ```text
                     Instance A
@@ -3180,24 +3180,24 @@ Un bannissement effectué sur l'instance A se propage à toutes les autres :
         BanChecker  BanChecker  BanChecker
 ```
 
-### 10.23 Stratégie de test — pourquoi miniredis plutôt qu'un vrai Redis
+### 10.23 Test strategy — why miniredis rather than a real Redis
 
-Pour tester `RedisEventBus` sans exiger un serveur Redis réel pendant `go test` (ni de la part du développeur local, ni en CI), la bibliothèque **`miniredis`** (implémentation Redis en mémoire pure, en Go) a été retenue plutôt que d'installer un vrai Redis dans le workflow CI.
+To test `RedisEventBus` without requiring a real Redis server during `go test` (neither for the local developer nor in CI), the **`miniredis`** library (a pure in-memory Redis implementation, written in Go) was chosen over installing a real Redis in the CI workflow.
 
-| Critère | miniredis | Redis en CI |
+| Criterion | miniredis | Redis in CI |
 |---|---|---|
-| Redis installé localement | ❌ non requis | ❌ non requis |
-| Processus externe | ❌ non | ✅ oui |
-| Rapidité | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| `go test` immédiat | ✅ | ❌ nécessite config CI |
-| Reproductibilité | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| Test du vrai Redis | ⚠️ simulation | ✅ oui |
+| Redis installed locally | ❌ not required | ❌ not required |
+| External process | ❌ no | ✅ yes |
+| Speed | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| Immediate `go test` | ✅ | ❌ requires CI config |
+| Reproducibility | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| Testing real Redis | ⚠️ simulation | ✅ yes |
 
-**Décision** : `miniredis` maintenant, garantissant que `go test ./...` fonctionne partout sans dépendance externe — cohérent avec le principe de testabilité appliqué depuis le début. Un test d'intégration avec un vrai Redis reste une évolution complémentaire envisageable, pas un remplacement.
+**Decision**: `miniredis` for now, guaranteeing that `go test ./...` works everywhere with no external dependency — consistent with the testability principle applied from the start. An integration test with a real Redis remains a possible complementary evolution, not a replacement.
 
-Les tests couvrent : le chemin nominal (publier un événement, le recevoir, vérifier le round-trip JSON avec une tolérance sur le timestamp via `assert.WithinDuration`), et le cas fail-fast (`Subscribe()` doit échouer immédiatement si Redis est injoignable, pas silencieusement).
+The tests cover: the happy path (publish an event, receive it, verify the JSON round-trip with a tolerance on the timestamp via `assert.WithinDuration`), and the fail-fast case (`Subscribe()` must fail immediately if Redis is unreachable, not silently).
 
-### 10.24 Architecture complète de l'Étape 7
+### 10.24 Complete architecture of Step 7
 
 ```text
 tenant-core/
@@ -3230,7 +3230,7 @@ tenant-core/
 │   ├── memory.go
 │   │   └── MemoryEventBus
 │   │
-│   └── redis/            (sous-module Go séparé)
+│   └── redis/            (separate Go sub-module)
 │       ├── go.mod
 │       └── redis.go
 │           └── RedisEventBus
@@ -3240,10 +3240,10 @@ tenant-core/
         └── MemoryStore
 ```
 
-### 10.25 Le principe architectural à retenir
+### 10.25 The architectural principle to remember
 
 ```text
-                    MÉTIER
+                    BUSINESS
                       │
                       ▼
                 AdminService
@@ -3262,34 +3262,34 @@ tenant-core/
                                 Redis
 ```
 
-`AdminService` ❌ ne connaît pas HTTP, ❌ ne connaît pas Redis, ❌ ne connaît pas Gin, ❌ ne connaît pas Echo, ❌ ne connaît pas PostgreSQL.
+`AdminService` ❌ doesn't know HTTP, ❌ doesn't know Redis, ❌ doesn't know Gin, ❌ doesn't know Echo, ❌ doesn't know PostgreSQL.
 
-`AdminService` ✅ connaît `AdminStore`, ✅ connaît `EventBus`.
+`AdminService` ✅ knows `AdminStore`, ✅ knows `EventBus`.
 
-> **Le cœur définit les contrats. Les adaptateurs implémentent ces contrats.** Exactement le même principe que celui appliqué avec les adaptateurs de middleware (Étape 6).
+> **The core defines the contracts. The adapters implement these contracts.** Exactly the same principle applied with the middleware adapters (Step 6).
 
-### 10.26 Ce qui reste volontairement pour plus tard
+### 10.26 What is deliberately left for later
 
-| Sujet | État actuel | Évolution |
+| Topic | Current state | Evolution |
 |---|---|---|
-| Admin API | Fonctionnelle pour les transitions | Authentification/RBAC |
-| Erreurs HTTP | Principalement `500` | Mapping `404`/`409`/`500`/`503` |
-| SetState → Publish | Non atomique | Pattern Outbox |
-| EventBus | Redis Pub/Sub | Gestion avancée reconnexion/lifecycle |
-| Redis | Propagation temps réel | Résilience/observabilité |
-| Création tenant | `AdminStore.Create` existe | Ajouter la capacité métier `Service.Create` si nécessaire |
-| Lecture admin | `Store.Get` existe | Ajouter `Service.Get` si le besoin métier apparaît |
-| Tests Redis | Couverts via `miniredis` | Tests d'intégration avec un vrai serveur Redis, en complément |
+| Admin API | Functional for transitions | Authentication/RBAC |
+| HTTP errors | Mostly `500` | Mapping `404`/`409`/`500`/`503` |
+| SetState → Publish | Not atomic | Outbox pattern |
+| EventBus | Redis Pub/Sub | Advanced reconnection/lifecycle handling |
+| Redis | Real-time propagation | Resilience/observability |
+| Tenant creation | `AdminStore.Create` exists | Add the `Service.Create` business capability if needed |
+| Admin reading | `Store.Get` exists | Add `Service.Get` if the business need arises |
+| Redis tests | Covered via `miniredis` | Integration tests with a real Redis server, as a complement |
 
-**En une phrase** : l'Étape 7 transforme le toolkit d'un système capable de résoudre un tenant en un système capable de gérer son cycle de vie et de propager ses changements d'état à travers plusieurs instances, tout en conservant un cœur métier indépendant de HTTP et de Redis.
+**In one sentence**: Step 7 turns the toolkit from a system able to resolve a tenant into a system able to manage its lifecycle and propagate its state changes across multiple instances, while keeping a business core independent of HTTP and Redis.
 
 ---
 
-## 11. Étape 8 — Helpers de test (tenanttest)
+## 11. Step 8 — Test helpers (tenanttest)
 
-### 11.1 Le problème résolu
+### 11.1 The problem solved
 
-Avant cette étape, pour tester du code applicatif dépendant du tenant courant, il fallait écrire manuellement :
+Before this step, to test application code depending on the current tenant, one had to write manually:
 
 ```go
 t := &tenant.Tenant{
@@ -3300,14 +3300,14 @@ t := &tenant.Tenant{
 ctx := tenantctx.WithTenant(context.Background(), t)
 ```
 
-Cette logique se répétait dans plusieurs tests internes au toolkit (`fakeResolver`, `fakeStore`, `fakeAdminStore` — utiles pour tester les composants internes du toolkit lui-même, mais pas destinés à être exposés). Un **utilisateur externe** qui veut simplement tester son application ne devrait pas avoir à connaître toute cette mécanique interne. C'est précisément le rôle de `tenanttest`.
+This logic was repeated across several tests internal to the toolkit (`fakeResolver`, `fakeStore`, `fakeAdminStore` — useful for testing the toolkit's own internal components, but not meant to be exposed). An **external user** who simply wants to test their application shouldn't have to know all this internal machinery. That is exactly the role of `tenanttest`.
 
-### 11.2 Pourquoi un package séparé de `tenantctx`
+### 11.2 Why a package separate from `tenantctx`
 
 | | `tenantctx` | `tenanttest` |
 |---|---|---|
-| Responsabilité | Gérer le tenant présent dans le `context.Context` de l'application | Fournir des outils pour construire facilement des contextes de test |
-| Chemin | Production | Tests |
+| Responsibility | Manage the tenant present in the application's `context.Context` | Provide tools to easily build test contexts |
+| Path | Production | Tests |
 
 ```text
 Application
@@ -3332,9 +3332,9 @@ tenantctx.WithTenant()
 context.Context
 ```
 
-Un développeur qui importe `tenantctx` dans son application de production ne récupère donc jamais, dans le même import, des fonctionnalités destinées exclusivement au test. Les packages racontent clairement leur rôle : `tenantctx` = mécanisme de production ; `tenanttest` = ergonomie de test.
+A developer importing `tenantctx` in their production application therefore never picks up, via that same import, functionality meant exclusively for testing. The packages clearly state their role: `tenantctx` = production mechanism; `tenanttest` = testing ergonomics.
 
-### 11.3 Architecture du package
+### 11.3 Package architecture
 
 ```text
 tenant-core/
@@ -3355,7 +3355,7 @@ tenanttest
     └──────────────► tenantctx
 ```
 
-Aucune logique métier supplémentaire — uniquement de l'ergonomie de test.
+No additional business logic — purely testing ergonomics.
 
 ### 11.4 `WithFakeTenant`
 
@@ -3375,13 +3375,13 @@ ctx := tenanttest.WithFakeTenant(
 )
 ```
 
-### 11.5 Pourquoi conserver une API simple
+### 11.5 Why keep a simple API
 
-Le choix a été de **volontairement** garder `WithFakeTenant(ctx, id, state)` plutôt que d'y ajouter progressivement des paramètres (`roles`, `permissions`, ...), ce qui rendrait la fonction difficile à utiliser pour le cas le plus fréquent : *« j'ai simplement besoin d'un tenant dans mon contexte. »*
+The choice was to **deliberately** keep `WithFakeTenant(ctx, id, state)` rather than progressively adding parameters to it (`roles`, `permissions`, ...), which would make the function hard to use for the most common case: *"I just need a tenant in my context."*
 
 ### 11.6 `WithFakeTenantFull`
 
-Pour les tests nécessitant davantage de contrôle (notamment RBAC) :
+For tests needing more control (notably RBAC):
 
 ```go
 func WithFakeTenantFull(
@@ -3401,11 +3401,11 @@ ctx := tenanttest.WithFakeTenantFull(
 )
 ```
 
-Particulièrement utile pour tester le RBAC, des rôles précis, des états particuliers, des scénarios métier complexes, ou de futurs champs de `Tenant`.
+Particularly useful for testing RBAC, specific roles, particular states, complex business scenarios, or future `Tenant` fields.
 
-### 11.7 Factorisation entre les deux helpers
+### 11.7 Factoring between the two helpers
 
-`WithFakeTenant` délègue à `WithFakeTenantFull`, pour que la logique de création/injection du contexte n'existe qu'à un seul endroit :
+`WithFakeTenant` delegates to `WithFakeTenantFull`, so the context creation/injection logic exists in only one place:
 
 ```text
                   tenanttest
@@ -3424,22 +3424,22 @@ Particulièrement utile pour tester le RBAC, des rôles précis, des états part
                context.Context
 ```
 
-### 11.8 Pourquoi ne pas créer un faux Resolver dès cette étape
+### 11.8 Why not create a fake Resolver at this step
 
-Le besoin actuel de `tenanttest` est *injecter directement un tenant*, pas *simuler tout le pipeline HTTP*. Des helpers comme `NewFakeResolver(...)`, `NewFakeStore(...)`, `NewFakeManager(...)` n'ont volontairement **pas** été créés à cette étape.
+`tenanttest`'s current need is *injecting a tenant directly*, not *simulating the whole HTTP pipeline*. Helpers like `NewFakeResolver(...)`, `NewFakeStore(...)`, `NewFakeManager(...)` were deliberately **not** created at this step.
 
-> **Ne pas abstraire prématurément ; commencer avec le plus petit contrat qui résout réellement le problème.**
+> **Don't abstract prematurely; start with the smallest contract that actually solves the problem.**
 
-### 11.9 Le contrat de tenanttest
+### 11.9 The tenanttest contract
 
 ```text
-Entrée
+Input
   │
   ▼
 tenanttest.WithFakeTenant(...)
   │
   ▼
-context.Context contenant le tenant
+context.Context containing the tenant
   │
   ▼
 tenantctx.FromContext(ctx)
@@ -3448,17 +3448,17 @@ tenantctx.FromContext(ctx)
 Tenant
 ```
 
-> **Tout tenant injecté par `tenanttest` doit pouvoir être récupéré par le mécanisme officiel `tenantctx.FromContext`.**
+> **Any tenant injected by `tenanttest` must be retrievable via the official `tenantctx.FromContext` mechanism.**
 
-### 11.10 et 11.11 Tests du package
+### 11.10 and 11.11 Package tests
 
-**`TestWithFakeTenant`** vérifie le helper minimal : `ID`, `State`, `Roles` vide.
+**`TestWithFakeTenant`** verifies the minimal helper: `ID`, `State`, empty `Roles`.
 
-**`TestWithFakeTenantFull`** vérifie qu'un tenant complet (y compris `Roles`) est correctement conservé — garantissant que les informations RBAC ne sont pas perdues.
+**`TestWithFakeTenantFull`** verifies that a full tenant (including `Roles`) is correctly preserved — guaranteeing that RBAC information isn't lost.
 
-Ces deux tests restent volontairement courts : `tenantctx.WithTenant()`/`FromContext()` ont déjà été testés en profondeur à l'Étape 1 ; ici, seul le **contrat d'intégration** du helper est vérifié.
+Both tests remain deliberately short: `tenantctx.WithTenant()`/`FromContext()` were already tested in depth in Step 1; here, only the helper's **integration contract** is verified.
 
-### 11.12 Exemple d'utilisation par un utilisateur du toolkit
+### 11.12 Usage example by a toolkit user
 
 ```go
 func GetCurrentTenantName(ctx context.Context) string {
@@ -3486,9 +3486,9 @@ func TestGetCurrentTenantName(t *testing.T) {
 }
 ```
 
-Le développeur n'a besoin ni de démarrer Redis, ni de créer un `MemoryStore`, ni un `Resolver`, ni de construire une requête HTTP, ni de démarrer Gin/Echo/Chi, ni d'utiliser `Manager`. C'est exactement le gain recherché.
+The developer doesn't need to start Redis, create a `MemoryStore`, a `Resolver`, build an HTTP request, start Gin/Echo/Chi, or use `Manager`. This is exactly the benefit sought.
 
-### 11.13 Exemple pour le RBAC
+### 11.13 Example for RBAC
 
 ```go
 ctx := tenanttest.WithFakeTenantFull(
@@ -3501,9 +3501,9 @@ ctx := tenanttest.WithFakeTenantFull(
 )
 ```
 
-Permet de tester `tenant → RBAC → permission autorisée/refusée` sans aucune infrastructure externe.
+Allows testing `tenant → RBAC → permission allowed/denied` with no external infrastructure whatsoever.
 
-### 11.14 Architecture globale après l'Étape 8
+### 11.14 Overall architecture after Step 8
 
 ```text
                     tenant-core
@@ -3537,27 +3537,27 @@ Permet de tester `tenant → RBAC → permission autorisée/refusée` sans aucun
                context.Context
 ```
 
-### 11.15 Principe architectural retenu
+### 11.15 Architectural principle adopted
 
-> **Les outils de test doivent simplifier l'utilisation du cœur sans polluer le cœur avec une logique spécifique aux tests.**
+> **Test tools must make the core easier to use without polluting the core with test-specific logic.**
 
-Ainsi : `tenantctx` = mécanisme de production ; `tenanttest` = ergonomie de test — et non `tenantctx` = production + mocks + helpers + fake stores + ....
+So: `tenantctx` = production mechanism; `tenanttest` = testing ergonomics — and not `tenantctx` = production + mocks + helpers + fake stores + ....
 
-### 11.16 Évolutions possibles (non implémentées)
+### 11.16 Possible evolutions (not implemented)
 
 ```text
 tenanttest/
 │
 ├── tenanttest.go
-├── resolver.go   (évolution future)
-├── store.go      (évolution future)
-├── manager.go    (évolution future)
+├── resolver.go   (future evolution)
+├── store.go      (future evolution)
+├── manager.go    (future evolution)
 └── ...
 ```
 
-Avec potentiellement `tenanttest.NewFakeResolver(...)`, `tenanttest.NewFakeStore(...)`, `tenanttest.NewManager(...)` — uniquement lorsque des besoins réels apparaîtront, en accord avec la règle générale de ne pas abstraire prématurément.
+Potentially with `tenanttest.NewFakeResolver(...)`, `tenanttest.NewFakeStore(...)`, `tenanttest.NewManager(...)` — only once real needs arise, in line with the general rule of not abstracting prematurely.
 
-### 11.17 Résumé de l'Étape 8
+### 11.17 Step 8 summary
 
 ```text
                     tenanttest
@@ -3581,11 +3581,11 @@ Avec potentiellement `tenanttest.NewFakeResolver(...)`, `tenanttest.NewFakeStore
                      Tenant
 ```
 
-**But final** : permettre à un développeur de tester facilement du code multi-tenant avec un tenant fictif, sans infrastructure, sans HTTP, sans Resolver, sans Store et sans framework, tout en utilisant exactement le même mécanisme `tenantctx` que le code de production.
+**Final goal**: let a developer easily test multi-tenant code with a fake tenant, with no infrastructure, no HTTP, no Resolver, no Store, and no framework, while using exactly the same `tenantctx` mechanism as production code.
 
 ---
 
-## 12. Architecture complète finale
+## 12. Final complete architecture
 
 ```text
                          ┌─────────────────────┐
@@ -3628,7 +3628,7 @@ Avec potentiellement `tenanttest.NewFakeResolver(...)`, `tenanttest.NewFakeStore
                          └─────────────────────┘
 ```
 
-**Administration :**
+**Administration:**
 
 ```text
 Admin API
@@ -3651,7 +3651,7 @@ AdminService
                 BanChecker
 ```
 
-**Vision synthétique de la composition (`tenant.New()`)** :
+**Synthetic view of the composition (`tenant.New()`)**:
 
 ```text
                     tenant.New()
@@ -3673,7 +3673,7 @@ AdminService
                     Tenant Core
 ```
 
-**Pourquoi les options fonctionnelles** — plutôt qu'un constructeur énorme (`New(resolver, store, eventBus, banChecker, rateLimiter, rbac, metrics, cacheKey, ...)`), difficile à lire et à maintenir, l'API adoptée est :
+**Why functional options** — rather than a huge constructor (`New(resolver, store, eventBus, banChecker, rateLimiter, rbac, metrics, cacheKey, ...)`), hard to read and maintain, the API adopted is:
 
 ```go
 tenant.New(
@@ -3682,13 +3682,13 @@ tenant.New(
 )
 ```
 
-**Important** : le `Manager` effectivement implémenté (Étapes 6-7) reste volontairement minimal — il n'assemble que `Resolver` et `Store`, panique si l'un des deux manque, et son unique méthode `Resolve(r *http.Request) (*Tenant, error)` s'arrête à la production d'un `*Tenant`, sans construire de `context.Context` (pour éviter un cycle d'import avec `tenantctx`). Les autres composants (`BanChecker`, `RateLimiter`, `RBAC`, `Metrics`, `CacheKeyer`, `EventBus`) restent des **briques indépendantes**, que l'application invoque explicitement là où c'est pertinent — le diagramme ci-dessus représente l'écosystème des composants disponibles, **pas** un pipeline unique imposé automatiquement par `Manager` lui-même. Voir la section [Décisions / points à clarifier](#18-décisions--points-à-clarifier) pour le détail de cette nuance entre la vision d'ensemble et l'implémentation effective de `tenant.New()`.
+**Important**: the `Manager` actually implemented (Steps 6-7) remains deliberately minimal — it only assembles `Resolver` and `Store`, panics if either is missing, and its single method `Resolve(r *http.Request) (*Tenant, error)` stops at producing a `*Tenant`, without building a `context.Context` (to avoid an import cycle with `tenantctx`). The other components (`BanChecker`, `RateLimiter`, `RBAC`, `Metrics`, `CacheKeyer`, `EventBus`) remain **independent building blocks**, which the application invokes explicitly wherever relevant — the diagram above represents the ecosystem of available components, **not** a single pipeline automatically imposed by `Manager` itself. See the [Decisions / points to clarify](#18-decisions--points-to-clarify) section for details on this nuance between the overall vision and the actual implementation of `tenant.New()`.
 
 ---
 
-## 13. Flux de données
+## 13. Data flow
 
-### 13.1 Requête utilisateur normale
+### 13.1 Normal user request
 
 ```text
 HTTP Request
@@ -3708,22 +3708,22 @@ tenantctx
 Application Handler
 ```
 
-Détaillé :
+In detail:
 
 ```text
-Étape 1 — Resolver
+Step 1 — Resolver
 Request → SubdomainResolver → TenantID("tenant-a")
 
-Étape 2 — Store
+Step 2 — Store
 TenantID("tenant-a") → Store → *Tenant{ID: tenant-a, State: active, Roles: [admin]}
 
-Étape 3 — Context
+Step 3 — Context
 *Tenant → tenantctx.WithTenant(...) → context.Context
 
-Les composants qui ont besoin du tenant font ensuite tenantctx.FromContext(ctx).
+Components that need the tenant then call tenantctx.FromContext(ctx).
 ```
 
-### 13.2 Bannissement
+### 13.2 Ban
 
 ```text
 Admin API
@@ -3738,14 +3738,14 @@ EventBus.Publish()
     ↓
 Redis Pub/Sub
     ↓
-Autres instances
+Other instances
     ↓
 BanChecker
     ↓
-Cache local invalidé / état mis à jour (résolution par timestamp)
+Local cache invalidated / state updated (timestamp-based resolution)
 ```
 
-### 13.3 Test applicatif
+### 13.3 Application test
 
 ```text
 tenanttest.WithFakeTenant(...)
@@ -3759,13 +3759,13 @@ Test
 
 ---
 
-## 14. Concurrence et thread-safety
+## 14. Concurrency and thread-safety
 
-Chaque composant à état partagé a été analysé selon son **profil d'accès** (lecture fréquente vs écriture fréquente, collection dynamique de clés vs valeur unique), avec la primitive de synchronisation adaptée à ce profil précis — jamais un mécanisme unique appliqué par réflexe.
+Each component with shared state was analyzed according to its **access profile** (frequent reads vs. frequent writes, dynamic collection of keys vs. a single value), with the synchronization primitive matched to that specific profile — never a single mechanism applied out of habit.
 
-### 14.1 `sync.RWMutex` — lecture fréquente, écriture rare
+### 14.1 `sync.RWMutex` — frequent reads, rare writes
 
-Utilisé par `MemoryStore`, `CachedStore`, `MemoryEventBus` (liste d'abonnés), `RBAC` (définitions de rôles/permissions).
+Used by `MemoryStore`, `CachedStore`, `MemoryEventBus` (subscriber list), `RBAC` (role/permission definitions).
 
 ```text
 Reader A ── RLock ──►
@@ -3784,15 +3784,15 @@ Writer
 Unlock()
 ```
 
-Plusieurs lecteurs accèdent simultanément sans jamais se bloquer entre eux ; une écriture reste exclusive et attend que toutes les lectures en cours se terminent.
+Several readers access the data simultaneously without ever blocking each other; a write remains exclusive and waits for all in-progress reads to finish.
 
-### 14.2 Le piège des pointeurs dans une map
+### 14.2 The trap of pointers inside a map
 
 ```text
 map[TenantID]*Tenant
 ```
 
-Une map protégée par `RWMutex` protège les accès à la map **elle-même** (ajout, suppression, lecture d'une clé), mais **pas** le contenu pointé par les valeurs qu'elle stocke si ce contenu est muté directement.
+A map protected by `RWMutex` protects access to the map **itself** (adding, removing, reading a key), but **not** the content pointed to by the values it stores, if that content is mutated directly.
 
 ```text
 Map
@@ -3804,39 +3804,39 @@ Map
                     State
 ```
 
-**Règle retenue et appliquée systématiquement** : les méthodes de lecture (`Get`) retournent toujours une **copie**, jamais le pointeur interne ; les méthodes d'écriture (`SetState`, `Create`, `Update`) modifient l'objet interne **directement, sous `Lock()` exclusif** — jamais via un aller-retour lecture-modification-réécriture, qui recréerait une fenêtre de *lost update*.
+**Rule adopted and consistently applied**: read methods (`Get`) always return a **copy**, never the internal pointer; write methods (`SetState`, `Create`, `Update`) modify the internal object **directly, under an exclusive `Lock()`** — never through a read-modify-write round trip, which would recreate a *lost update* window.
 
-### 14.3 `sync.Map` + `LoadOrStore` — collections dynamiques par clé
+### 14.3 `sync.Map` + `LoadOrStore` — dynamic per-key collections
 
-Utilisé par `BanChecker` (`TenantID → banEntry`), `TenantRateLimiter` (`TenantID → *rate.Limiter`), `MemoryMetrics` (`TenantID → *tenantMetrics`).
+Used by `BanChecker` (`TenantID → banEntry`), `TenantRateLimiter` (`TenantID → *rate.Limiter`), `MemoryMetrics` (`TenantID → *tenantMetrics`).
 
-**Le problème résolu par `LoadOrStore`** : si deux goroutines arrivent simultanément pour un tenant qui n'a **jamais** encore d'entrée, un simple `Load` puis `Store` séparés pourrait faire créer et écraser deux valeurs distinctes (par exemple deux `*rate.Limiter` différents pour le même tenant, l'un écrasant l'autre). `LoadOrStore` garantit atomiquement qu'**une seule** valeur devient la référence officielle partagée, même si les deux goroutines ont chacune préparé leur propre valeur candidate.
+**The problem solved by `LoadOrStore`**: if two goroutines arrive simultaneously for a tenant that **never** yet has an entry, a plain, separate `Load` then `Store` could end up creating and overwriting two distinct values (for example two different `*rate.Limiter`s for the same tenant, one overwriting the other). `LoadOrStore` atomically guarantees that **only one** value becomes the officially shared reference, even if both goroutines each prepared their own candidate value.
 
 ```text
 Goroutine A                    Goroutine B
 
 Load → absent                  Load → absent
   │                              │
-crée limiter A                 crée limiter B
+creates limiter A              creates limiter B
   │                              │
 LoadOrStore                    LoadOrStore
   │                              │
-A est enregistré               B voit que A existe déjà
+A gets registered              B sees A already exists
                                   │
-                           B n'est PAS enregistré
+                           B is NOT registered
 
-Résultat : les deux goroutines utilisent le même *rate.Limiter A
+Result: both goroutines use the same *rate.Limiter A
 ```
 
-### 14.4 `sync/atomic` — compteurs à écriture très fréquente
+### 14.4 `sync/atomic` — very frequently written counters
 
-Utilisé par `MemoryMetrics` pour `requests`, `errors`, `latencySum`, `latencyCount` — des compteurs incrémentés à chaque requête, potentiellement par des dizaines de milliers de goroutines simultanées. `atomic.Int64.Add()` garantit une incrémentation correcte sans jamais nécessiter de verrou explicite.
+Used by `MemoryMetrics` for `requests`, `errors`, `latencySum`, `latencyCount` — counters incremented on every request, potentially by tens of thousands of simultaneous goroutines. `atomic.Int64.Add()` guarantees correct incrementing without ever needing an explicit lock.
 
-**Deux niveaux de concurrence combinés** dans `MemoryMetrics` : `sync.Map` protège la collection dynamique de tenants, `atomic.Int64` protège chaque compteur individuel — chacun à l'endroit optimal pour son propre problème.
+**Two levels of concurrency combined** in `MemoryMetrics`: `sync.Map` protects the dynamic collection of tenants, `atomic.Int64` protects each individual counter — each at the optimal spot for its own problem.
 
-### 14.5 Isolation par goroutine + `recover()` — EventBus (mémoire et Redis)
+### 14.5 Per-goroutine isolation + `recover()` — EventBus (memory and Redis)
 
-Chaque handler abonné à un `TenantEvent` s'exécute dans sa **propre goroutine**, protégée individuellement par un `recover()` :
+Each handler subscribed to a `TenantEvent` runs in its **own goroutine**, individually protected by a `recover()`:
 
 ```go
 defer func() {
@@ -3846,113 +3846,113 @@ defer func() {
 }()
 ```
 
-**Pourquoi ceci est crucial** : `recover()` ne fonctionne qu'à l'intérieur de la **même goroutine** que le `panic()` qu'il intercepte — il doit donc être placé à l'intérieur de la fonction lancée par `go`, jamais autour de l'appel à `Publish()` (qui a déjà retourné avant que le handler s'exécute réellement).
+**Why this is crucial**: `recover()` only works **within the same goroutine** as the `panic()` it intercepts — it must therefore be placed inside the function launched by `go`, never around the call to `Publish()` (which has already returned before the handler actually runs).
 
-**Deux niveaux de goroutines dans `RedisEventBus`**, distincts et à ne pas confondre :
+**Two levels of goroutines in `RedisEventBus`**, distinct and not to be confused:
 
 ```text
-Redis listener goroutine (unique, permanente)
+Redis listener goroutine (single, permanent)
         │
-        │ réception séquentielle des messages
+        │ sequential message reception
         ▼
-   événement reçu
+   event received
         │
-        ├──► handler A goroutine + recover (éphémère, par événement)
+        ├──► handler A goroutine + recover (ephemeral, per event)
         ├──► handler B goroutine + recover
         └──► handler C goroutine + recover
 ```
 
-### 14.6 Résolution de conflit par timestamp — `BanChecker`
+### 14.6 Conflict resolution by timestamp — `BanChecker`
 
-Un problème de concurrence plus subtil que la simple protection mémoire : un snapshot initial (chargé au démarrage) et un événement reçu en parallèle peuvent tous deux écrire une information pour le même tenant, sans garantie sur l'ordre réel d'exécution de leurs goroutines respectives. La solution retenue associe chaque entrée à un **timestamp de dernière mise à jour**, et rejette toute écriture dont le timestamp est **antérieur** à celui déjà stocké — garantissant qu'une information périmée ne peut jamais régresser une information plus récente, indépendamment de l'ordre d'arrivée réel.
+A concurrency problem more subtle than simple memory protection: an initial snapshot (loaded at startup) and an event received in parallel can both write information for the same tenant, with no guarantee on the actual execution order of their respective goroutines. The solution adopted associates each entry with a **last-updated timestamp**, and rejects any write whose timestamp is **older** than the one already stored — guaranteeing that stale information can never regress more recent information, regardless of the actual arrival order.
 
-### 14.7 `singleflight` — déduplication des appels concurrents
+### 14.7 `singleflight` — deduplication of concurrent calls
 
-Utilisé par `CachedStore.Get()`. Distinct des mécanismes ci-dessus : ce n'est pas un problème de **sécurité mémoire** (le `RWMutex` protège déjà correctement la map de cache), mais un problème d'**efficacité** — sans `singleflight`, un pic de requêtes simultanées pour un même tenant en cache miss provoquerait autant d'appels dupliqués vers la source de vérité (*cache stampede*). `singleflight.Group.Do(key, fn)` garantit qu'un seul appel réel part vers la source pour une clé donnée ; les appelants concurrents attendent et reçoivent le même résultat.
+Used by `CachedStore.Get()`. Distinct from the mechanisms above: this is not a **memory safety** problem (the `RWMutex` already correctly protects the cache map), but an **efficiency** problem — without `singleflight`, a spike of simultaneous requests for the same tenant on a cache miss would trigger just as many duplicate calls to the source of truth (*cache stampede*). `singleflight.Group.Do(key, fn)` guarantees that only one real call goes out to the source for a given key; concurrent callers wait and receive the same result.
 
-### 14.8 Ce que `go test -race` permet de détecter
+### 14.8 What `go test -race` can detect
 
-Le détecteur de race conditions de Go instrumente le binaire de test pour surveiller tous les accès mémoire concurrents. Il détecte notamment :
+Go's race detector instruments the test binary to monitor all concurrent memory accesses. It notably detects:
 
-- une lecture et une écriture simultanées sur la même variable/champ, sans synchronisation commune (ce qui aurait été le cas si `Get()` avait continué à retourner le pointeur interne du `MemoryStore`, combiné à une écriture directe hors verrou) ;
-- une incohérence dans l'usage d'une map Go non protégée sous accès concurrents ;
-- tout accès non protégé qui *pourrait* corrompre l'état, même si le test ne "voit" pas de valeur incorrecte par pur hasard d'ordonnancement.
+- a simultaneous read and write on the same variable/field, with no shared synchronization (which would have been the case had `Get()` kept returning `MemoryStore`'s internal pointer, combined with a direct write outside the lock);
+- an inconsistency in the use of an unprotected Go map under concurrent access;
+- any unprotected access that *could* corrupt state, even if the test doesn't "see" an incorrect value purely by scheduling luck.
 
-`go test -race` a été systématiquement utilisé à travers toutes les étapes, y compris dans la CI GitHub Actions à chaque push, sur le module racine et sur chaque sous-module Go séparé.
-
----
-
-## 15. Testabilité
-
-### 15.1 Principe général
-
-Chaque composant est conçu pour être testé **indépendamment**, sans nécessiter d'infrastructure réelle. C'est un principe appliqué dès l'Étape 1 et maintenu jusqu'à l'Étape 8.
-
-### 15.2 Fakes internes
-
-Pour tester les composants du cœur du toolkit eux-mêmes, des implémentations factices minimales des interfaces (`fakeResolver`, `fakeStore`, `fakeAdminStore`, `countingStore`) sont écrites directement dans les fichiers de test des packages concernés — jamais exportées publiquement, elles n'existent que pour isoler le composant testé de ses dépendances réelles.
-
-### 15.3 Tests unitaires purs
-
-La grande majorité des composants (`tenantctx`, `store`, `eventbus`, `banchecker`, `ratelimit`, `cachekey`, `rbac`, `metrics`, `admin`) sont testés avec des tests Go standards (`testing` + `testify`), sans dépendance externe.
-
-### 15.4 Tests des middlewares HTTP — `httptest`
-
-`net/http.testing` (`httptest.NewRequest`, `httptest.NewRecorder`) est utilisé pour tester l'adaptateur `net/http` et l'adaptateur Chi (qui repose directement sur `http.Handler`), en simulant une vraie chaîne de traitement HTTP de bout en bout.
-
-### 15.5 Tests des middlewares de framework — mécanismes spécifiques
-
-- **Gin** — `gin.CreateTestContext(recorder)` construit un `*gin.Context` de test à partir d'un `*gin.Engine` interne.
-- **Echo** — `echo.New()` + `e.NewContext(req, recorder)` construit un `echo.Context` de test.
-- **Chi** — repose directement sur `net/http`, donc les mêmes primitives `httptest` suffisent (pas de mécanisme de test spécifique à Chi).
-
-Dans chaque cas, le test appelle le **vrai** handler produit par le middleware (`handler.ServeHTTP(...)`, `handler(c)`), jamais directement une fonction interne — garantissant que le comportement testé correspond exactement à ce qui se passerait en production, y compris le routage lui-même (pour l'Admin API, notamment, l'usage de `handler.ServeHTTP()` plutôt qu'un appel direct au handler valide aussi que la déclaration de route `http.ServeMux` fonctionne réellement).
-
-### 15.6 Tests de Redis — `miniredis`
-
-Voir [section 10.23](#1023-stratégie-de-test--pourquoi-miniredis-plutôt-quun-vrai-redis). Une implémentation Redis en mémoire pure permet de tester `RedisEventBus` sans exiger de serveur Redis réel, ni localement, ni en CI.
-
-### 15.7 `tenanttest` — testabilité pour les utilisateurs externes
-
-Le package `tenanttest` prolonge ce principe de testabilité **au-delà** du toolkit lui-même, pour les développeurs qui l'utilisent dans leurs propres applications (voir [Étape 8](#11-étape-8--helpers-de-test-tenanttest) en détail).
-
-### 15.8 Tests de concurrence — `go test -race`
-
-Chaque composant à état partagé possède au moins un test dédié à la concurrence réelle (multiples goroutines simultanées), systématiquement exécuté avec le flag `-race` — que ce soit en local ou en CI GitHub Actions. C'est le mécanisme qui a permis de découvrir et corriger des problèmes de conception (notamment le piège des pointeurs partagés dans `MemoryStore`, section 14.2) avant qu'ils ne deviennent des bugs en production.
-
-### 15.9 Pourquoi les composants sont conçus pour être testables indépendamment
-
-Chaque composant expose une **interface minimale** définie dans le package `tenant` (ou dans son propre package pour les composants qui n'ont pas encore de contrat centralisé). N'importe quelle implémentation, y compris une implémentation factice écrite en quelques lignes dans un fichier de test, peut satisfaire ce contrat grâce au typage structurel de Go — permettant de tester un composant de haut niveau (`Manager`, `admin.Service`, un middleware) sans jamais instancier de vraie base de données, de vrai Redis, ou de vrai serveur HTTP complet.
+`go test -race` has been used systematically throughout every step, including in the GitHub Actions CI on every push, on the root module and on each separate Go sub-module.
 
 ---
 
-## 16. Limites et évolutions futures
+## 15. Testability
 
-Cette section regroupe l'ensemble des limites **explicitement documentées** au fil des étapes, ainsi que les évolutions envisagées mais **non implémentées**.
+### 15.1 General principle
 
-| Sujet | État actuel (implémenté) | Limitation connue | Évolution future envisagée |
+Each component is designed to be tested **independently**, with no need for real infrastructure. This principle was applied from Step 1 and maintained through Step 8.
+
+### 15.2 Internal fakes
+
+To test the toolkit's own core components, minimal fake implementations of the interfaces (`fakeResolver`, `fakeStore`, `fakeAdminStore`, `countingStore`) are written directly inside the test files of the relevant packages — never exported publicly, they exist only to isolate the component under test from its real dependencies.
+
+### 15.3 Pure unit tests
+
+The vast majority of components (`tenantctx`, `store`, `eventbus`, `banchecker`, `ratelimit`, `cachekey`, `rbac`, `metrics`, `admin`) are tested with standard Go tests (`testing` + `testify`), with no external dependency.
+
+### 15.4 Testing HTTP middlewares — `httptest`
+
+`net/http`'s `httptest` (`httptest.NewRequest`, `httptest.NewRecorder`) is used to test the `net/http` adapter and the Chi adapter (which relies directly on `http.Handler`), simulating a real end-to-end HTTP processing chain.
+
+### 15.5 Testing framework middlewares — framework-specific mechanisms
+
+- **Gin** — `gin.CreateTestContext(recorder)` builds a test `*gin.Context` from an internal `*gin.Engine`.
+- **Echo** — `echo.New()` + `e.NewContext(req, recorder)` builds a test `echo.Context`.
+- **Chi** — relies directly on `net/http`, so the same `httptest` primitives suffice (no Chi-specific test mechanism).
+
+In each case, the test calls the **real** handler produced by the middleware (`handler.ServeHTTP(...)`, `handler(c)`), never an internal function directly — guaranteeing that the tested behavior matches exactly what would happen in production, including the routing itself (for the Admin API in particular, using `handler.ServeHTTP()` rather than calling the handler directly also validates that the `http.ServeMux` route declarations actually work).
+
+### 15.6 Testing Redis — `miniredis`
+
+See [section 10.23](#1023-test-strategy--why-miniredis-rather-than-a-real-redis). A pure in-memory Redis implementation lets `RedisEventBus` be tested with no real Redis server, neither locally nor in CI.
+
+### 15.7 `tenanttest` — testability for external users
+
+The `tenanttest` package extends this testability principle **beyond** the toolkit itself, for developers using it in their own applications (see [Step 8](#11-step-8--test-helpers-tenanttest) in detail).
+
+### 15.8 Concurrency tests — `go test -race`
+
+Every component with shared state has at least one test dedicated to real concurrency (multiple simultaneous goroutines), systematically run with the `-race` flag — whether locally or in GitHub Actions CI. This is the mechanism that made it possible to discover and fix design issues (notably the shared-pointer trap in `MemoryStore`, section 14.2) before they became production bugs.
+
+### 15.9 Why components are designed to be independently testable
+
+Each component exposes a **minimal interface** defined in the `tenant` package (or in its own package, for components without a centralized contract yet). Any implementation, including a fake one written in a few lines inside a test file, can satisfy that contract thanks to Go's structural typing — allowing a higher-level component (`Manager`, `admin.Service`, a middleware) to be tested without ever instantiating a real database, a real Redis, or a real, full HTTP server.
+
+---
+
+## 16. Limitations and future evolutions
+
+This section gathers all the limitations **explicitly documented** along the way, as well as evolutions considered but **not implemented**.
+
+| Topic | Current state (implemented) | Known limitation | Future evolution considered |
 |---|---|---|---|
-| `SetState → Publish` (Admin) | Ordre retenu, jamais d'événement mensonger | Non atomique — un `Publish` peut échouer après un `SetState` réussi, événement potentiellement perdu | Pattern Outbox (transaction unique état + événement, worker de publication asynchrone avec retry) |
-| Admin API — authentification | Aucune | L'API ne doit pas être exposée directement à Internet en production | Authentification/autorisation à ajouter |
-| Admin API — erreurs HTTP | `writeError` retourne systématiquement `500` | Pas de distinction `404`/`409`/`503` | Mapping fin des erreurs, nécessite une erreur sentinelle exportée au niveau de `AdminStore` |
-| Admin API — endpoints | `Ban`/`Disable`/`Activate` uniquement | Pas de `Create`/`Get` HTTP, même si `AdminStore.Create` et `Store.Get` existent | Ajouter `Service.Create`/`Service.Get` d'abord, puis les endpoints correspondants, si le besoin métier apparaît |
-| `EventBus` (Redis) | Pub/Sub fonctionnel, fail-fast à l'abonnement | Pas de gestion avancée de reconnexion/lifecycle en cas de coupure Redis prolongée | Reconnexion automatique, observabilité de la santé de la connexion |
-| `Redis` | Propagation temps réel opérationnelle | Résilience et observabilité limitées | Monitoring dédié, métriques de latence de propagation |
-| `MemoryStore.Get()` — copie | Copie superficielle (*shallow copy*) du `*Tenant` | Le champ `Roles []string` partage le même tableau sous-jacent que l'original ; une mutation de `Roles[i]` par le consommateur affecterait encore l'original | Copie profonde (*deep copy*) du slice `Roles` si ce risque devient significatif |
-| Tests `RedisEventBus` | Couverts via `miniredis` (simulation) | `miniredis` ne garantit pas toutes les subtilités d'un vrai serveur Redis | Test d'intégration avec un vrai Redis, en complément, pas en remplacement |
-| `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | Pas de simulation du pipeline HTTP complet | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — uniquement si un besoin réel apparaît |
-| `Prometheus` (Metrics) | Interface `MetricsCollector` définie + implémentation en mémoire | Pas d'adaptateur Prometheus concret construit à ce stade | Implémentation `PrometheusMetrics` satisfaisant le même contrat |
-| `RateLimiter` distribué | Implémentation en mémoire (par instance) | Les quotas ne sont pas partagés entre plusieurs instances du serveur | `RedisRateLimiter`, sur le même principe d'agnosticisme que `EventBus` |
-| `go.mod` — directive `replace` (sous-modules) | Utilisée pour le développement local avant publication | Pointe vers un chemin local (`../..`), invalide pour un vrai utilisateur externe | À retirer une fois le module racine taggé et publié |
+| `SetState → Publish` (Admin) | Order adopted, never a lying event | Not atomic — a `Publish` can fail after a successful `SetState`, event potentially lost | Outbox pattern (single state + event transaction, asynchronous publishing worker with retry) |
+| Admin API — authentication | None | The API must not be exposed directly to the Internet in production | Authentication/authorization to add |
+| Admin API — HTTP errors | `writeError` always returns `500` | No `404`/`409`/`503` distinction | Fine-grained error mapping, requires an exported sentinel error at the `AdminStore` level |
+| Admin API — endpoints | `Ban`/`Disable`/`Activate` only | No HTTP `Create`/`Get`, even though `AdminStore.Create` and `Store.Get` exist | Add `Service.Create`/`Service.Get` first, then the corresponding endpoints, if the business need arises |
+| `EventBus` (Redis) | Functional Pub/Sub, fail-fast on subscribe | No advanced reconnection/lifecycle handling on a prolonged Redis outage | Automatic reconnection, connection health observability |
+| `Redis` | Real-time propagation operational | Limited resilience and observability | Dedicated monitoring, propagation latency metrics |
+| `MemoryStore.Get()` — copy | Shallow copy of `*Tenant` | The `Roles []string` field shares the same underlying array as the original; a consumer mutating `Roles[i]` would still affect the original | Deep copy of the `Roles` slice if this risk becomes significant |
+| `RedisEventBus` tests | Covered via `miniredis` (simulation) | `miniredis` doesn't guarantee every subtlety of a real Redis server | Integration test with a real Redis, as a complement, not a replacement |
+| `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | No full HTTP pipeline simulation | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — only if a real need arises |
+| `Prometheus` (Metrics) | `MetricsCollector` interface defined + in-memory implementation | No concrete Prometheus adapter built at this stage | `PrometheusMetrics` implementation satisfying the same contract |
+| Distributed `RateLimiter` | In-memory implementation (per instance) | Quotas are not shared across multiple server instances | `RedisRateLimiter`, on the same agnosticism principle as `EventBus` |
+| `go.mod` — `replace` directive (sub-modules) | Used for local development before publishing | Points to a local path (`../..`), invalid for a real external user | To be removed once the root module is tagged and published |
 
-> **Règle transversale à retenir** : chaque limite ci-dessus a été **documentée explicitement dans le code au moment où elle a été identifiée** (commentaires, messages de log), plutôt que laissée implicite — cohérent avec le principe général du projet de préférer une incohérence *observable* aujourd'hui à une fausse solution prématurée.
+> **Cross-cutting rule to remember**: every limitation above was **explicitly documented in the code at the moment it was identified** (comments, log messages), rather than left implicit — consistent with the project's general principle of preferring an *observable* inconsistency today over a premature false solution.
 
 ---
 
-## 17. Arbre des packages
+## 17. Package tree
 
 ```text
-tenant-core/                          (module racine)
+tenant-core/                          (root module)
 ├── tenant.go                         → TenantID, State, Tenant, Resolver,
 │                                        Store, AdminStore, Manager, Option,
 │                                        New(), Manager.Resolve()
@@ -3999,47 +3999,47 @@ tenant-core/                          (module racine)
 │   └── tenanttest_test.go
 │
 ├── middleware/
-│   ├── nethttp.go                    → Wrap()                (module racine)
+│   ├── nethttp.go                    → Wrap()                (root module)
 │   │
-│   ├── gin/                          → Middleware()   (SOUS-MODULE Go séparé)
+│   ├── gin/                          → Middleware()   (SEPARATE Go sub-module)
 │   │   ├── go.mod   (module .../middleware/gin, replace → ../..)
 │   │   ├── gin.go
 │   │   └── gin_test.go
 │   │
-│   ├── echo/                         → Middleware()   (SOUS-MODULE Go séparé)
+│   ├── echo/                         → Middleware()   (SEPARATE Go sub-module)
 │   │   ├── go.mod   (module .../middleware/echo, replace → ../..)
 │   │   ├── echo.go
 │   │   └── echo_test.go
 │   │
-│   └── chi/                          → Middleware()   (SOUS-MODULE Go séparé)
+│   └── chi/                          → Middleware()   (SEPARATE Go sub-module)
 │       ├── go.mod   (module .../middleware/chi, replace → ../..)
 │       ├── chi.go
 │       └── chi_test.go
 │
-├── eventbus/redis/                   → RedisEventBus (SOUS-MODULE Go séparé)
+├── eventbus/redis/                   → RedisEventBus (SEPARATE Go sub-module)
 │   ├── go.mod        (module .../eventbus/redis, replace → ../..)
 │   ├── redis.go
 │   └── redis_test.go (miniredis)
 │
-├── .github/workflows/ci.yml          → CI multi-module (root + 4 sous-modules)
+├── .github/workflows/ci.yml          → Multi-module CI (root + 4 sub-modules)
 ├── LICENSE (MIT)
 ├── README.md
 └── .gitignore
 ```
 
-**Statut des sous-modules Go indépendants** — `middleware/gin`, `middleware/echo`, `middleware/chi` et `eventbus/redis` possèdent chacun leur **propre `go.mod`**, distinct du module racine. Cette organisation garantit qu'un développeur qui utilise uniquement `net/http` (ou uniquement Gin) n'installe **jamais** les dépendances des frameworks/technologies qu'il n'utilise pas — chaque sous-module se construit et se teste indépendamment (`cd middleware/gin && go test ./...`), et la CI GitHub Actions exécute une étape dédiée par sous-module (`working-directory`), en plus de l'étape sur le module racine.
+**Status of the independent Go sub-modules** — `middleware/gin`, `middleware/echo`, `middleware/chi`, and `eventbus/redis` each have their **own `go.mod`**, distinct from the root module. This organization guarantees that a developer using only `net/http` (or only Gin) **never** installs the dependencies of frameworks/technologies they don't use — each sub-module builds and tests independently (`cd middleware/gin && go test ./...`), and the GitHub Actions CI runs a dedicated step per sub-module (`working-directory`), in addition to the step for the root module.
 
-Chaque sous-module référence le module racine via une directive `replace ... => ../..` pendant le développement, permettant de pointer vers le code local avant qu'une version taguée ne soit publiée sur le dépôt public.
+Each sub-module references the root module via a `replace ... => ../..` directive during development, allowing it to point at the local code before a tagged version is published to the public repository.
 
 ---
 
-## 18. Décisions / points à clarifier
+## 18. Decisions / points to clarify
 
-Cette section signale les endroits où les documentations sources décrivent des contrats de **façon conceptuelle** (souvent introduits par le mot *« Conceptuellement »* dans les documents d'origine), qui diffèrent légèrement de la forme exacte retenue dans l'implémentation réelle, sans que cela remette en cause la décision architecturale sous-jacente — uniquement le détail de signature.
+This section flags places where the source documents describe contracts in a **conceptual way** (often introduced by the word *"Conceptually"* in the original documents), which differ slightly from the exact form adopted in the actual implementation, without this calling into question the underlying architectural decision — only the signature detail.
 
-### 18.1 RateLimiter — interface conceptuelle vs implémentation retenue
+### 18.1 RateLimiter — conceptual interface vs. implementation adopted
 
-Le document source de l'Étape 4 présente un contrat conceptuel simplifié :
+Step 4's source document presents a simplified conceptual contract:
 
 ```go
 type RateLimiter interface {
@@ -4047,11 +4047,11 @@ type RateLimiter interface {
 }
 ```
 
-L'implémentation effectivement retenue repose sur un type concret `TenantRateLimiter`, dont la méthode `Allow` prend directement un `*Tenant` (pas seulement un `TenantID`) et dont la règle de limite par tenant est **injectée** via une fonction (`LimitFunc`) fournie par l'application — plutôt que fixée dans l'implémentation elle-même — s'appuyant sur `golang.org/x/time/rate` (modèle *token bucket*). Le principe métier (une limite indépendante par tenant, cœur agnostique de l'infrastructure) reste identique ; seule la forme exacte du contrat diffère de la version conceptuelle présentée dans le document source.
+The implementation actually adopted relies on a concrete `TenantRateLimiter` type, whose `Allow` method takes a `*Tenant` directly (not just a `TenantID`), and whose per-tenant limit rule is **injected** via a function (`LimitFunc`) supplied by the application — rather than fixed in the implementation itself — built on `golang.org/x/time/rate` (a *token bucket* model). The business principle (an independent limit per tenant, an infrastructure-agnostic core) stays identical; only the exact shape of the contract differs from the conceptual version presented in the source document.
 
-### 18.2 RBAC — `Authorizer` conceptuel vs `RBAC`/`Can` retenu
+### 18.2 RBAC — conceptual `Authorizer` vs. `RBAC`/`Can` adopted
 
-Le document source présente un contrat conceptuel :
+The source document presents a conceptual contract:
 
 ```go
 type Authorizer interface {
@@ -4059,20 +4059,20 @@ type Authorizer interface {
 }
 ```
 
-L'implémentation retenue est un type concret `RBAC` (pas une interface publiée dans `tenant.go`), avec une méthode `DefineRole(tenantID, role, permissions)` pour l'enregistrement, et `Can(t *Tenant, permission string) bool` pour la vérification — les définitions étant organisées **par tenant** (`map[TenantID]map[role]map[permission]struct{}`), comme décrit fidèlement dans le document source (section 8.5 de ce document). Le principe (séparation rôle/permission, indépendance par tenant, absence de dépendance HTTP) est identique.
+The implementation adopted is a concrete `RBAC` type (not an interface published in `tenant.go`), with a `DefineRole(tenantID, role, permissions)` method for registration, and `Can(t *Tenant, permission string) bool` for checking — definitions being organized **per tenant** (`map[TenantID]map[role]map[permission]struct{}`), as faithfully described in the source document (section 8.5 of this document). The principle (role/permission separation, per-tenant independence, no HTTP dependency) is identical.
 
-### 18.3 Metrics — Prometheus mentionné comme réalisé vs statut réel
+### 18.3 Metrics — Prometheus mentioned as done vs. actual status
 
-Le titre de l'Étape 5 dans les documents sources (« RBAC + Metrics (Prometheus) ») et plusieurs passages décrivent une implémentation `PrometheusMetrics` de façon assez concrète. D'après le déroulé effectif du projet, seule l'**interface** `MetricsCollector` et une implémentation **en mémoire** (`MemoryMetrics`, avec `sync.Map` + `atomic.Int64`) ont été concrètement construites et testées à ce stade — l'adaptateur Prometheus lui-même reste une **évolution future** listée en section 16, pas un composant déjà livré. Cette distinction est faite ici conformément à la règle *« ne pas transformer les améliorations futures en fonctionnalités déjà implémentées »*.
+The title of Step 5 in the source documents ("RBAC + Metrics (Prometheus)") and several passages describe a `PrometheusMetrics` implementation in fairly concrete terms. Based on the project's actual progress, only the **interface** `MetricsCollector` and an **in-memory** implementation (`MemoryMetrics`, with `sync.Map` + `atomic.Int64`) were actually built and tested at this stage — the Prometheus adapter itself remains a **future evolution** listed in section 16, not an already-delivered component. This distinction is made here in line with the rule *"don't turn future improvements into already-implemented features"*.
 
-### 18.4 `tenant.New()` et l'orchestration complète des composants
+### 18.4 `tenant.New()` and full component orchestration
 
-Le document source de synthèse (section 11 à 16 du document *resumer.txt*) présente une vision englobante de `tenant.New()` avec des options comme `WithEventBus`, `WithRateLimiter`, `WithRBAC`, `WithMetrics` — orchestrant potentiellement l'ensemble des neuf composants du toolkit. L'implémentation effective de `Manager`/`New()` reste volontairement **plus restreinte** : seuls `Resolver` et `Store` sont assemblés par `New()`, la méthode `Resolve()` s'arrêtant à la production d'un `*Tenant` (sans construire de `context.Context`, pour éviter un cycle d'import avec `tenantctx`). Les autres composants (`BanChecker`, `RateLimiter`, `RBAC`, `Metrics`, `CacheKeyer`, `EventBus`) restent des briques indépendantes que l'application ou les adaptateurs de middleware invoquent explicitement, sans être automatiquement enchaînées par `Manager` lui-même — conformément au principe explicitement énoncé dans le document source : *« ce diagramme représente les composants disponibles dans l'écosystème, pas nécessairement un ordre d'exécution que `tenant.New()` imposera automatiquement »*, et *« `tenant.New()` doit rester propre : il compose les dépendances ; il ne doit pas devenir un énorme middleware qui mélange toutes les responsabilités »*.
+The source summary document (sections 11 to 16 of the *resumer.txt* document) presents an all-encompassing vision of `tenant.New()` with options like `WithEventBus`, `WithRateLimiter`, `WithRBAC`, `WithMetrics` — potentially orchestrating all nine components of the toolkit. The actual `Manager`/`New()` implementation remains deliberately **more limited**: only `Resolver` and `Store` are assembled by `New()`, with the `Resolve()` method stopping at producing a `*Tenant` (without building a `context.Context`, to avoid an import cycle with `tenantctx`). The other components (`BanChecker`, `RateLimiter`, `RBAC`, `Metrics`, `CacheKeyer`, `EventBus`) remain independent building blocks that the application or middleware adapters invoke explicitly, without being automatically chained together by `Manager` itself — consistent with the principle explicitly stated in the source document: *"this diagram represents the components available in the ecosystem, not necessarily an execution order that `tenant.New()` will automatically impose"*, and *"`tenant.New()` must stay clean: it composes dependencies; it must not become a giant middleware that mixes every responsibility"*.
 
-### 18.5 Nom du package `banchecker`
+### 18.5 Name of the `banchecker` package
 
-Un document source (Étape 3) situe `BanChecker` dans un package nommé `banchecker/`, cohérent avec le reste de la documentation et avec l'implémentation effective.
+A source document (Step 3) places `BanChecker` in a package named `banchecker/`, consistent with the rest of the documentation and with the actual implementation.
 
 ---
 
-*Fin de la documentation technique complète de tenant-core.*
+*End of tenant-core's complete technical documentation.*

@@ -8,16 +8,16 @@ import (
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 )
 
-// ErrNoTenant est retournée quand aucun tenant ne peut être identifié.
+// ErrNoTenant is returned when no tenant can be identified.
 var ErrNoTenant = errors.New("resolver: no tenant found in request")
 
-// SubdomainResolver extrait le tenant depuis le sous-domaine de la requête.
-// Ex: pour baseDomain="myapp.com", "tenant-a.myapp.com" donne TenantID("tenant-a").
+// SubdomainResolver extracts the tenant from the request's subdomain.
+// E.g. for baseDomain="myapp.com", "tenant-a.myapp.com" gives TenantID("tenant-a").
 type SubdomainResolver struct {
 	baseDomain string
 }
 
-// NewSubdomainResolver crée un SubdomainResolver pour le domaine de base donné.
+// NewSubdomainResolver creates a SubdomainResolver for the given base domain.
 func NewSubdomainResolver(baseDomain string) *SubdomainResolver {
 	return &SubdomainResolver{baseDomain: baseDomain}
 }
@@ -25,7 +25,7 @@ func NewSubdomainResolver(baseDomain string) *SubdomainResolver {
 func (sr *SubdomainResolver) Resolve(r *http.Request) (tenant.TenantID, error) {
 	host := r.Host
 
-	// On retire un éventuel port (ex: "tenant-a.myapp.com:8080")
+	// Strip an optional port (e.g. "tenant-a.myapp.com:8080")
 	if idx := strings.Index(host, ":"); idx != -1 {
 		host = host[:idx]
 	}

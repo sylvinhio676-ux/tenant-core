@@ -7,18 +7,18 @@ import (
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 )
 
-// TenantEvent représente un changement d'état d'un tenant.
+// TenantEvent represents a tenant state change.
 type TenantEvent struct {
 	TenantID  tenant.TenantID
 	State     tenant.State
 	Timestamp time.Time
 }
 
-// EventBus permet de publier et de s'abonner aux changements d'état des tenants.
+// EventBus allows publishing and subscribing to tenant state changes.
 type EventBus interface {
-	// Publish diffuse un événement à tous les abonnés.
+	// Publish broadcasts an event to all subscribers.
 	Publish(ctx context.Context, event TenantEvent) error
 
-	// Subscribe enregistre un handler appelé pour chaque événement publié.
+	// Subscribe registers a handler called for each published event.
 	Subscribe(handler func(TenantEvent)) error
 }

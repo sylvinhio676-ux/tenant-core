@@ -34,18 +34,18 @@ func TestHTTPHandler_Ban(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 
-	// Important : on passe par ServeHTTP pour que le ServeMux
-	// effectue réellement le matching de {id}.
+	// Important: go through ServeHTTP so the ServeMux
+	// actually performs the {id} matching.
 	handler.ServeHTTP(recorder, req)
 
-	// Ban réussi → 204 No Content.
+	// Successful ban → 204 No Content.
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 
-	// Vérifie que le bon tenant a été transmis au Store.
+	// Verify that the correct tenant was passed to the Store.
 	assert.Equal(t, tenant.TenantID("tenant-A"), store.tenantID)
 	assert.Equal(t, tenant.Banned, store.state)
 
-	// Vérifie que l'événement a bien été publié.
+	// Verify that the event was indeed published.
 	select {
 	case event := <-events:
 		assert.Equal(t, tenant.TenantID("tenant-A"), event.TenantID)

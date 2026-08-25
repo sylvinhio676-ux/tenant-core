@@ -7,17 +7,17 @@ import (
 )
 
 /**
- * MemoryEventBus est une implémentation in-process de EventBus.
-	Elle ne fonctionne qu'au sein d'une seule instance du serveur — pour un
-	comportement distribué (multi-instance), voir eventbus/redis (sous-module
-	optionnel, voir cahier des charges section 6/11).
+ * MemoryEventBus is an in-process implementation of EventBus.
+	It only works within a single server instance — for distributed
+	(multi-instance) behavior, see eventbus/redis (optional submodule,
+	see spec section 6/11).
 */
 type MemoryEventBus struct {
 	mu       sync.RWMutex
 	handlers []func(TenantEvent)
 }
 
-// NewMemoryEventBus crée un EventBus in-memory.
+// NewMemoryEventBus creates an in-memory EventBus.
 func NewMemoryEventBus() *MemoryEventBus {
 	return &MemoryEventBus{}
 }
@@ -42,9 +42,9 @@ func (b *MemoryEventBus) Publish(ctx context.Context, event TenantEvent) error {
 }
 
 /**
- * safeCall exécute un handler en récupérant une éventuelle panique,
-	pour qu'un handler défaillant n'affecte jamais les autres abonnés
-	ni le processus dans son ensemble.
+ * safeCall runs a handler while recovering from any panic,
+	so that a failing handler never affects other subscribers
+	nor the process as a whole.
  */
 func safeCall(h func(TenantEvent), event TenantEvent) {
 	defer func() {

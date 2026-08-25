@@ -15,20 +15,20 @@ func TestMemoryMetrics_Snapshot(t *testing.T) {
 	ctx := context.Background()
 	tenantID := tenant.TenantID("tenant-A")
 
-	// Plusieurs requêtes
+	// Several requests
 	metrics.IncRequests(ctx, tenantID)
 	metrics.IncRequests(ctx, tenantID)
 	metrics.IncRequests(ctx, tenantID)
 
-	// Une erreur
+	// One error
 	metrics.IncErrors(ctx, tenantID)
 
-	// Trois latences : 10ms, 20ms, 30ms
+	// Three latencies: 10ms, 20ms, 30ms
 	metrics.ObserveLatency(ctx, tenantID, 10*time.Millisecond)
 	metrics.ObserveLatency(ctx, tenantID, 20*time.Millisecond)
 	metrics.ObserveLatency(ctx, tenantID, 30*time.Millisecond)
 
-	// On récupère le snapshot
+	// Retrieve the snapshot
 	snapshot := metrics.Snapshot(tenantID)
 
 	// Then

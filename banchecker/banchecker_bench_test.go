@@ -20,7 +20,7 @@ func BenchmarkBanChecker_IsBanned_Warm(b *testing.B) {
 			ids := make([]tenant.TenantID, count)
 			for i := 0; i < count; i++ {
 				ids[i] = tenant.TenantID(fmt.Sprintf("tenant-%d", i))
-				// Moitié bannis, moitié actifs, pour un scénario réaliste
+				// Half banned, half active, for a realistic scenario
 				state := tenant.Active
 				if i%2 == 0 {
 					state = tenant.Banned
@@ -48,8 +48,8 @@ func BenchmarkBanChecker_IsBanned_ConcurrentWithApply(b *testing.B) {
 		bc.apply(ids[i], false, time.Now())
 	}
 
-	// Une goroutine dédiée écrit en continu pendant toute la durée du
-	// benchmark, simulant des changements d'état réguliers en arrière-plan.
+	// A dedicated goroutine writes continuously for the entire duration
+	// of the benchmark, simulating regular state changes in the background.
 	stop := make(chan struct{})
 	go func() {
 		i := 0

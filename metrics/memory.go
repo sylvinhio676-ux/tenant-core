@@ -16,13 +16,13 @@ type tenantMetrics struct {
 	latencyCount atomic.Int64
 }
 
-// MemoryMetrics est une implémentation in-memory de MetricsCollector,
-// utile pour le dev/test ou les cas simples ne nécessitant pas Prometheus.
+// MemoryMetrics is an in-memory implementation of MetricsCollector,
+// useful for dev/test or simple cases that don't need Prometheus.
 type MemoryMetrics struct {
 	tenants sync.Map // TenantID -> *tenantMetrics
 }
 
-// New crée un MemoryMetrics vide.
+// New creates an empty MemoryMetrics.
 func New() *MemoryMetrics {
 	return &MemoryMetrics{}
 }
@@ -46,9 +46,9 @@ func (m *MemoryMetrics) ObserveLatency(ctx context.Context, tenantID tenant.Tena
 	tm.latencyCount.Add(1)
 }
 
-// Snapshot retourne un résumé lisible des métriques d'un tenant — utile
-// pour les tests et le debug, pas destiné à remplacer un vrai backend
-// d'observabilité comme Prometheus.
+// Snapshot returns a readable summary of a tenant's metrics — useful
+// for tests and debugging, not meant to replace a real observability
+// backend like Prometheus.
 type Snapshot struct {
 	Requests     int64
 	Errors       int64

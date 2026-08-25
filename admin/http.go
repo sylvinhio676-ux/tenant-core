@@ -8,17 +8,17 @@ import (
 )
 
 /**
- * HTTPHandler expose Service via une API REST en net/http pur, sans
-	dépendance à un framework — voir cahier des charges section 8
-	(agnosticisme). Peut être montée sur n'importe quel serveur HTTP Go.
+ * HTTPHandler exposes Service via a pure net/http REST API, with no
+	framework dependency — see spec section 8
+	(agnosticism). Can be mounted on any Go HTTP server.
  */
 type HTTPHandler struct {
 	mux     *http.ServeMux
 	service *Service
 }
 
-// NewHTTPHandler crée un HTTPHandler prêt à l'emploi, avec ses routes déjà
-// enregistrées.
+// NewHTTPHandler creates a ready-to-use HTTPHandler, with its routes
+// already registered.
 func NewHTTPHandler(service *Service) *HTTPHandler {
 	h := &HTTPHandler{
 		mux:     http.NewServeMux(),
@@ -32,8 +32,8 @@ func NewHTTPHandler(service *Service) *HTTPHandler {
 	return h
 }
 
-// ServeHTTP fait de HTTPHandler un http.Handler standard, intégrable
-// directement dans n'importe quel serveur Go.
+// ServeHTTP makes HTTPHandler a standard http.Handler, embeddable
+// directly in any Go server.
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }

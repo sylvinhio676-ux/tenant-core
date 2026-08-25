@@ -9,10 +9,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Ce benchmark isole la primitive sync.Map.LoadOrStore exactement comme
-// utilisée dans getLimiter(), pour vérifier expérimentalement combien de
-// candidats *rate.Limiter sont réellement construits sous contention —
-// sans modifier TenantRateLimiter lui-même.
+// This benchmark isolates the sync.Map.LoadOrStore primitive exactly as
+// used in getLimiter(), to experimentally verify how many
+// *rate.Limiter candidates are actually built under contention —
+// without modifying TenantRateLimiter itself.
 func BenchmarkLoadOrStore_CandidateCount(b *testing.B) {
 	goroutineCounts := []int{1, 2, 4, 8, 16, 32}
 

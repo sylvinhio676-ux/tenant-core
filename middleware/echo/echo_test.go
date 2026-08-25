@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeResolver simule le Resolver.
+// fakeResolver simulates the Resolver.
 type fakeResolver struct {
 	id  tenant.TenantID
 	err error
@@ -25,7 +25,7 @@ func (f *fakeResolver) Resolve(r *http.Request) (tenant.TenantID, error) {
 	return f.id, f.err
 }
 
-// fakeStore simule le Store.
+// fakeStore simulates the Store.
 type fakeStore struct {
 	tenant *tenant.Tenant
 	err    error
@@ -61,7 +61,7 @@ func TestMiddleware_InjectsTenantIntoContext(t *testing.T) {
 		}),
 	)
 
-	// Création de l'environnement de test Echo.
+	// Set up the Echo test environment.
 	e := echo.New()
 
 	req := httptest.NewRequest(
@@ -74,20 +74,20 @@ func TestMiddleware_InjectsTenantIntoContext(t *testing.T) {
 
 	c := e.NewContext(req, recorder)
 
-	// Construction du middleware avec un "next" factice.
+	// Build the middleware with a fake "next".
 	middleware := Middleware(manager)
 
 	handler := middleware(func(c echo.Context) error {
 		return nil
 	})
 
-	// Exécution du middleware.
+	// Run the middleware.
 	err := handler(c)
 
 	require.NoError(t, err)
 
-	// Vérifie que le tenant a été injecté dans le contexte
-	// standard de la requête.
+	// Verify that the tenant was injected into the request's
+	// standard context.
 	actualTenant := tenantctx.FromContext(
 		c.Request().Context(),
 	)

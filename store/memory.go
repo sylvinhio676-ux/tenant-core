@@ -11,11 +11,11 @@ import (
 var _ tenant.Store = (*MemoryStore)(nil)
 var _ tenant.AdminStore = (*MemoryStore)(nil)
 
-// ErrTenantNotFound est retournée quand un tenant n'existe pas dans le store.
+// ErrTenantNotFound is returned when a tenant does not exist in the store.
 var ErrTenantNotFound = errors.New("tenant: not found")
 
-// ErrTenantAlreadyExists est retournée quand on tente de créer un tenant
-// dont l'ID existe déjà.
+// ErrTenantAlreadyExists is returned when attempting to create a tenant
+// whose ID already exists.
 var ErrTenantAlreadyExists = errors.New("tenant: already exists")
 
 type MemoryStore struct {
@@ -29,8 +29,8 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-// Get retourne une COPIE du tenant, pour que le consommateur ne puisse
-// jamais muter l'état interne du store via le pointeur reçu.
+// Get returns a COPY of the tenant, so the caller can never mutate the
+// store's internal state through the received pointer.
 func (ms *MemoryStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Tenant, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -44,8 +44,8 @@ func (ms *MemoryStore) Get(ctx context.Context, id tenant.TenantID) (*tenant.Ten
 	return &cp, nil
 }
 
-// set est la primitive interne d'écriture, non exposée en dehors du
-// package store — les écritures publiques passent par Create/Update/SetState.
+// set is the internal write primitive, not exposed outside the
+// store package — public writes go through Create/Update/SetState.
 func (ms *MemoryStore) set(t *tenant.Tenant) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -65,8 +65,8 @@ func (ms *MemoryStore) IsBanned(ctx context.Context, id tenant.TenantID) (bool, 
 	return t.State == tenant.Banned, nil
 }
 
-// Create ajoute un nouveau tenant. Retourne ErrTenantAlreadyExists si l'ID
-// est déjà utilisé.
+// Create adds a new tenant. Returns ErrTenantAlreadyExists if the ID
+// is already in use.
 func (ms *MemoryStore) Create(ctx context.Context, t *tenant.Tenant) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -80,8 +80,8 @@ func (ms *MemoryStore) Create(ctx context.Context, t *tenant.Tenant) error {
 	return nil
 }
 
-// Update remplace un tenant existant. Retourne ErrTenantNotFound s'il
-// n'existe pas encore.
+// Update replaces an existing tenant. Returns ErrTenantNotFound if it
+// does not exist yet.
 func (ms *MemoryStore) Update(ctx context.Context, t *tenant.Tenant) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -95,9 +95,9 @@ func (ms *MemoryStore) Update(ctx context.Context, t *tenant.Tenant) error {
 	return nil
 }
 
-// SetState modifie uniquement l'état d'un tenant existant, de façon
-// atomique (sous verrou exclusif) pour éviter tout lost update entre
-// goroutines concurrentes.
+// SetState only changes the state of an existing tenant, atomically
+// (under an exclusive lock) to avoid any lost update between
+// concurrent goroutines.
 func (ms *MemoryStore) SetState(ctx context.Context, id tenant.TenantID, state tenant.State) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()

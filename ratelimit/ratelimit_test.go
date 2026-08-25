@@ -15,7 +15,7 @@ func TestTenantRateLimiter_AppliesPerTenantLimit(t *testing.T) {
 			return rate.Limit(1000)
 		}
 		return rate.Limit(0)
-	}, 2) // burst de 2 — suffisant pour 2 appels immédiats côté premium
+	}, 2) // burst of 2 — enough for 2 immediate calls on the premium side
 
 	premium := &tenant.Tenant{ID: "tenant-premium"}
 	free := &tenant.Tenant{ID: "tenant-free"}
@@ -23,7 +23,7 @@ func TestTenantRateLimiter_AppliesPerTenantLimit(t *testing.T) {
 	assert.True(t, rl.Allow(premium))
 	assert.True(t, rl.Allow(premium))
 
-	// Le tenant free épuise son burst de 2 après 2 appels, puis bloqué
+	// The free tenant exhausts its burst of 2 after 2 calls, then gets blocked
 	assert.True(t, rl.Allow(free))
 	assert.True(t, rl.Allow(free))
 	assert.False(t, rl.Allow(free))
@@ -39,7 +39,7 @@ func TestTenantRateLimiter_ReusesLimiterAcrossConcurrentCalls(t *testing.T) {
 	var wg sync.WaitGroup
 	limiters := make([]*rate.Limiter, 50)
 
-	// 50 goroutines récupèrent le limiter du même tenant en même temps
+	// 50 goroutines fetch the same tenant's limiter at the same time
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -49,8 +49,8 @@ func TestTenantRateLimiter_ReusesLimiterAcrossConcurrentCalls(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Then : toutes les goroutines doivent avoir reçu EXACTEMENT le même
-	// pointeur — preuve que LoadOrStore a bien évité la duplication
+	// Then: every goroutine must have received EXACTLY the same
+	// pointer — proof that LoadOrStore did avoid duplication
 	first := limiters[0]
 	for _, l := range limiters {
 		assert.Same(t, first, l)

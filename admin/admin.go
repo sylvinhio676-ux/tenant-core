@@ -9,16 +9,16 @@ import (
 	"github.com/sylvinhio676-ux/tenant-core/eventbus"
 )
 
-// Service orchestre les opérations d'administration des tenants,
-// garantissant que tout changement d'état est toujours accompagné de la
-// publication de l'événement correspondant.
+// Service orchestrates tenant administration operations,
+// guaranteeing that every state change is always accompanied by the
+// publication of the corresponding event.
 //
-// Limite connue : SetState et Publish ne sont pas atomiques entre eux (ce
-// sont deux systèmes distincts). L'ordre SetState → Publish garantit qu'on
-// ne publie jamais un événement pour un état qui n'a pas réellement été
-// appliqué au Store — mais si Publish échoue après un SetState réussi,
-// l'événement peut être perdu jusqu'à resynchronisation manuelle ou via un
-// futur mécanisme de livraison durable (pattern Outbox).
+// Known limitation: SetState and Publish are not atomic with each other (they
+// are two distinct systems). The order SetState → Publish guarantees that we
+// never publish an event for a state that was not actually
+// applied to the Store — but if Publish fails after a successful SetState,
+// the event may be lost until manual resynchronization or a
+// future durable-delivery mechanism (Outbox pattern).
 type Service struct {
 	store tenant.AdminStore
 	bus   eventbus.EventBus
@@ -50,18 +50,18 @@ func (s *Service) transition(ctx context.Context, id tenant.TenantID, state tena
 	return nil
 }
 
-// Ban désactive définitivement un tenant pour fraude/abus, et propage
-// immédiatement le changement à toutes les instances abonnées à l'EventBus.
+// Ban permanently disables a tenant for fraud/abuse, and immediately
+// propagates the change to all instances subscribed to the EventBus.
 func (s *Service) Ban(ctx context.Context, id tenant.TenantID) error {
 	return s.transition(ctx, id, tenant.Banned)
 }
 
-// Disable désactive un tenant (ex: fin d'abonnement).
+// Disable disables a tenant (e.g. end of subscription).
 func (s *Service) Disable(ctx context.Context, id tenant.TenantID) error {
 	return s.transition(ctx, id, tenant.Disabled)
 }
 
-// Activate réactive un tenant (unban ou fin de désactivation).
+// Activate reactivates a tenant (unban or end of disabling).
 func (s *Service) Activate(ctx context.Context, id tenant.TenantID) error {
 	return s.transition(ctx, id, tenant.Active)
 }

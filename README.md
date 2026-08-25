@@ -1,5 +1,4 @@
 # tenant-core
-# tenant-core
 
 > Multi-tenancy toolkit for Go — resolve, isolate, and observe tenants natively in your HTTP stack.
 
@@ -31,7 +30,7 @@ tm := tenant.New(
 
 ## Documentation
 
-Pour une documentation technique complète (architecture, décisions de conception, concurrence, limites connues), voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For complete technical documentation (architecture, design decisions, concurrency, known limitations), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	tenant "github.com/sylvinhio676-ux/tenant-core"
@@ -15,6 +19,12 @@ import (
 
 	nethttp "github.com/sylvinhio676-ux/tenant-core/middleware/nethttp"
 )
+
+// shutdownTimeout bounds how long graceful shutdown waits for in-flight
+// requests to finish before giving up. This lives in cmd/server, the
+// toolkit's reference server — tenant-core itself never manages OS
+// signals or process lifecycle, only its own middleware/store/RBAC logic.
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	// 1. Store — in-memory source of truth for this demonstration.
@@ -86,11 +96,51 @@ func main() {
 	//    request, via the net/http adapter (our reference adapter).
 	handler := nethttp.Wrap(manager, mux)
 
-	log.Println("listening on :8080")
-	log.Println(`try: curl -H "Host: acme.localhost" http://localhost:8080/api/me`)
-	log.Println(`try: curl -H "Host: globex.localhost" http://localhost:8080/api/users  (expects 403 — globex only has users:read)`)
+	// 7. Graceful shutdown — listen for SIGINT/SIGTERM via the standard
+	// signal.NotifyContext, the idiomatic replacement for a manual
+	// signal.Notify channel: ctx is canceled the moment either signal
+	// arrives.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := http.ListenAndServe(":8080", handler); err != nil {
-		log.Fatal(err)
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: handler,
+	}
+
+	go func() {
+		log.Println("listening on :8080")
+		log.Println(`try: curl -H "Host: acme.localhost" http://localhost:8080/api/me`)
+		log.Println(`try: curl -H "Host: globex.localhost" http://localhost:8080/api/users  (expects 403 — globex only has users:read)`)
+
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	stop()
+	log.Println("shutdown signal received")
+
+	// Server.Shutdown already refuses new connections and waits for
+	// in-flight requests to finish on its own — this timeout only bounds
+	// how long we're willing to wait for that before giving up.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	log.Println("shutting down server...")
+	err := server.Shutdown(shutdownCtx)
+
+	switch {
+	case err == nil:
+		log.Println("server shut down cleanly")
+	case errors.Is(shutdownCtx.Err(), context.DeadlineExceeded):
+		// Shutdown() returns ctx.Err() in this case (i.e. this same
+		// DeadlineExceeded) — not a fatal condition, just a clear warning
+		// that some in-flight requests may not have finished before we
+		// gave up waiting.
+		log.Printf("WARNING: shutdown did not complete within %s, exiting anyway", shutdownTimeout)
+	default:
+		log.Fatalf("shutdown error: %v", err)
 	}
 }

@@ -2952,16 +2952,27 @@ Thanks to Go's structural typing, `RedisEventBus` automatically satisfies `event
 type RedisEventBus struct {
     client  *goredis.Client
     channel string
+
+    mu      sync.Mutex
+    pubsubs []*goredis.PubSub // tracked so Stop can close them
 }
 ```
 
 ```text
 RedisEventBus
 ├── Redis Client
-└── Redis Channel
+├── Redis Channel
+└── pubsubs (one *redis.PubSub per Subscribe call, for Stop)
 ```
 
 **Setup note**: a separate Go sub-module (`eventbus/redis/go.mod`), with the same local `replace` directive as the framework adapters, for the same reasons.
+
+**Network resilience is handled natively by go-redis — verified from source, not assumed.** `go-redis/v9`'s `*redis.PubSub` type documents itself as automatically reconnecting and resubscribing to its channels on network errors, and this was confirmed by reading `pubsub.go` (v9.22.0) directly: the goroutine behind `pubsub.Channel()` calls `Receive()` in a loop and only stops (closing the Go channel) when `Close()` has been called explicitly (returning `pool.ErrClosed`); any other error — including a lost connection — is retried transparently, with automatic resubscription to the same channels and a periodic health-check ping (every 3s by default) to catch silent disconnects. Concretely, this means:
+
+- The `for msg := range pubsub.Channel()` loop inside `Subscribe()` never exits because of a network blip — messages simply resume flowing once go-redis has reconnected.
+- Building a custom backoff/retry/resubscribe mechanism on top of this would duplicate logic go-redis already provides, for no benefit — and was considered and deliberately rejected for exactly that reason.
+- `RedisEventBus.Stop()` exists for a different purpose: an intentional, clean shutdown. It closes every `*redis.PubSub` created by `Subscribe`, which ends their `Channel()` loop and the associated goroutine. It is unrelated to reconnection and safe to call multiple times, or even if `Subscribe` was never called.
+- **Race between `Stop()` and an in-flight `Subscribe()`**: `Subscribe()`'s `pubsub.Receive(ctx)` can block for a while against a slow or degraded Redis, so `Stop()` could run — and close every subscription it currently knows about — before that `Subscribe()` call finishes. To avoid silently leaking that subscription (registered after `Stop()` already ran, and therefore never closed), `RedisEventBus` tracks a `stopped` flag: once `Receive()` succeeds, `Subscribe()` re-checks `stopped` under the same lock before registering the subscription; if `Stop()` already ran, it closes its own `pubsub` immediately instead and returns `ErrStopped`. This makes `Stop()` a true, final stop — a `RedisEventBus` cannot be revived by a `Subscribe()` call that was merely running late.
 
 ### 10.17 TenantEvent ↔ JSON transformation
 
@@ -3275,8 +3286,8 @@ tenant-core/
 | Admin API | Functional for transitions | Authentication/RBAC |
 | HTTP errors | Mostly `500` | Mapping `404`/`409`/`500`/`503` |
 | SetState → Publish | Not atomic | Outbox pattern |
-| EventBus | Redis Pub/Sub | Advanced reconnection/lifecycle handling |
-| Redis | Real-time propagation | Resilience/observability |
+| EventBus | Redis Pub/Sub, with a `Stop()` for clean shutdown (reconnection/resubscription on network errors is handled natively by go-redis's `*redis.PubSub` — see §10.16) | — |
+| Redis | Real-time propagation | Dedicated monitoring, propagation latency metrics |
 | Tenant creation | `AdminStore.Create` exists | Add the `Service.Create` business capability if needed |
 | Admin reading | `Store.Get` exists | Add `Service.Get` if the business need arises |
 | Redis tests | Covered via `miniredis` | Integration tests with a real Redis server, as a complement |
@@ -3936,8 +3947,8 @@ This section gathers all the limitations **explicitly documented** along the way
 | Admin API — authentication | None | The API must not be exposed directly to the Internet in production | Authentication/authorization to add |
 | Admin API — HTTP errors | `writeError` always returns `500` | No `404`/`409`/`503` distinction | Fine-grained error mapping, requires an exported sentinel error at the `AdminStore` level |
 | Admin API — endpoints | `Ban`/`Disable`/`Activate` only | No HTTP `Create`/`Get`, even though `AdminStore.Create` and `Store.Get` exist | Add `Service.Create`/`Service.Get` first, then the corresponding endpoints, if the business need arises |
-| `EventBus` (Redis) | Functional Pub/Sub, fail-fast on subscribe | No advanced reconnection/lifecycle handling on a prolonged Redis outage | Automatic reconnection, connection health observability |
-| `Redis` | Real-time propagation operational | Limited resilience and observability | Dedicated monitoring, propagation latency metrics |
+| `EventBus` (Redis) | Functional Pub/Sub, fail-fast on subscribe, `Stop()` for clean shutdown | None — reconnection and resubscription on transient network failures are handled natively by go-redis's `*redis.PubSub` (automatic reconnect + periodic health-check ping, see §10.16); this was previously listed here as a gap based on an unverified assumption, corrected after reading the go-redis source | n/a |
+| `Redis` | Real-time propagation operational | No dedicated monitoring or propagation-latency metrics (connection resilience itself is already handled by go-redis, see above) | Dedicated monitoring, propagation latency metrics |
 | `MemoryStore.Get()` — copy | Shallow copy of `*Tenant` | The `Roles []string` field shares the same underlying array as the original; a consumer mutating `Roles[i]` would still affect the original | Deep copy of the `Roles` slice if this risk becomes significant |
 | `RedisEventBus` tests | Covered via `miniredis` (simulation) | `miniredis` doesn't guarantee every subtlety of a real Redis server | Integration test with a real Redis, as a complement, not a replacement |
 | `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | No full HTTP pipeline simulation | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — only if a real need arises |

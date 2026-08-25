@@ -25,3 +25,6 @@ benchemarkRigoureur_profiling.txt
 
 # Claude Code local config/session data
 .claude/
+
+# Load test results are machine-specific, never committed
+loadtest/results/

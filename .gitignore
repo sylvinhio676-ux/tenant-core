@@ -22,3 +22,6 @@ coverage.txt
 coverage.html
 # doc/
 benchemarkRigoureur_profiling.txt
+
+# Claude Code local config/session data
+.claude/

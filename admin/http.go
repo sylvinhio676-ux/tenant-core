@@ -7,35 +7,71 @@ import (
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 )
 
-/**
- * HTTPHandler exposes Service via a pure net/http REST API, with no
-	framework dependency — see spec section 8
-	(agnosticism). Can be mounted on any Go HTTP server.
- */
+// HTTPHandler exposes Service via a plain net/http REST API.
 type HTTPHandler struct {
-	mux     *http.ServeMux
-	service *Service
+	mux           *http.ServeMux
+	service       *Service
+	authenticator Authenticator
 }
 
-// NewHTTPHandler creates a ready-to-use HTTPHandler, with its routes
-// already registered.
-func NewHTTPHandler(service *Service) *HTTPHandler {
+// HTTPHandlerOption configures a HTTPHandler at creation time.
+type HTTPHandlerOption func(*HTTPHandler)
+
+// WithAuthenticator protects the Admin API by requiring every request to
+// be authenticated before reaching an administrative operation.
+//
+// WARNING: without this option, the Admin API accepts requests without
+// any authentication — this mode is only suitable for local development
+// or tests, never for a deployment exposed to untrusted callers.
+func WithAuthenticator(a Authenticator) HTTPHandlerOption {
+	return func(h *HTTPHandler) {
+		h.authenticator = a
+	}
+}
+
+// NewHTTPHandler creates a ready-to-use HTTPHandler. Without
+// WithAuthenticator, the Admin API does not authenticate any request —
+// see WithAuthenticator to secure this endpoint.
+func NewHTTPHandler(service *Service, opts ...HTTPHandlerOption) *HTTPHandler {
 	h := &HTTPHandler{
 		mux:     http.NewServeMux(),
 		service: service,
 	}
 
-	h.mux.HandleFunc("PATCH /tenants/{id}/ban", h.handleBan)
-	h.mux.HandleFunc("PATCH /tenants/{id}/disable", h.handleDisable)
-	h.mux.HandleFunc("PATCH /tenants/{id}/activate", h.handleActivate)
+	for _, opt := range opts {
+		opt(h)
+	}
+
+	h.mux.HandleFunc("PATCH /tenants/{id}/ban", h.withAuth(h.handleBan))
+	h.mux.HandleFunc("PATCH /tenants/{id}/disable", h.withAuth(h.handleDisable))
+	h.mux.HandleFunc("PATCH /tenants/{id}/activate", h.withAuth(h.handleActivate))
 
 	return h
 }
 
-// ServeHTTP makes HTTPHandler a standard http.Handler, embeddable
-// directly in any Go server.
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
+}
+
+// withAuth wraps an admin handler with the authentication check, if an
+// Authenticator has been configured.
+func (h *HTTPHandler) withAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.authenticator == nil {
+			next(w, r)
+			return
+		}
+
+		_, err := h.authenticator.Authenticate(r)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		next(w, r)
+	}
 }
 
 func (h *HTTPHandler) handleBan(w http.ResponseWriter, r *http.Request) {

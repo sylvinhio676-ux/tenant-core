@@ -108,7 +108,18 @@ func main() {
 
 	// 6. Middleware — injects the resolved tenant into the context of each
 	//    request, via the net/http adapter (our reference adapter).
-	handler := nethttp.Wrap(manager, mux)
+	tenantHandler := nethttp.Wrap(manager, mux)
+
+	// 6b. Top-level router: /healthz and /readyz are registered here,
+	// OUTSIDE tenantHandler, and never go through tenant resolution.
+	// Health/readiness probes hit the server directly (by pod IP, not by
+	// tenant subdomain) and must never fail just because their request
+	// doesn't carry a Host header that resolves to a tenant — everything
+	// else falls through to the tenant-aware handler.
+	handler := http.NewServeMux()
+	handler.HandleFunc("GET /healthz", healthzHandler)
+	handler.HandleFunc("GET /readyz", readyzHandler)
+	handler.Handle("/", tenantHandler)
 
 	// 7. Graceful shutdown — listen for SIGINT/SIGTERM via the standard
 	// signal.NotifyContext, the idiomatic replacement for a manual
@@ -133,7 +144,18 @@ func main() {
 		}
 	}()
 
+	// Mark the server ready right after starting it — see health.go for
+	// what /readyz does with this.
+	ready.Store(true)
+
 	<-ctx.Done()
+
+	// First step of shutdown, before anything else: mark not-ready so
+	// /readyz starts returning 503 immediately, giving a load balancer a
+	// chance to stop routing new traffic here before Shutdown actually
+	// begins draining connections below.
+	ready.Store(false)
+
 	stop()
 	log.Println("shutdown signal received")
 

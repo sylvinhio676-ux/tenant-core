@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,16 +29,38 @@ const shutdownTimeout = 10 * time.Second
 
 func main() {
 	// 0. Configuration — resolved from the environment (PORT,
-	// TENANT_BASE_DOMAIN, CACHE_TTL_SECONDS), falling back to defaults when
-	// a variable is absent. A variable that is present but invalid is a
-	// configuration error, caught here before anything else starts.
+	// TENANT_BASE_DOMAIN, CACHE_TTL_SECONDS, LOG_FORMAT), falling back to
+	// defaults when a variable is absent. A variable that is present but
+	// invalid is a configuration error, caught here before anything else
+	// starts.
+	//
+	// This one error path unavoidably logs through slog's built-in default
+	// logger rather than the configured one: cfg.logFormat is exactly what
+	// failed to resolve, so there is no chosen format yet to honor.
 	cfg, err := loadServerConfig()
 	if err != nil {
-		log.Fatalf("configuration error: %v", err)
+		slog.Error("invalid configuration", "component", "config", "error", err)
+		os.Exit(1)
 	}
-	log.Printf(
-		"config: port=%d tenant_base_domain=%s cache_ttl=%s",
-		cfg.port, cfg.tenantBaseDomain, cfg.cacheTTL,
+
+	// slog.SetDefault makes slog.Info/Warn/Error usable as package-level
+	// functions everywhere below, without threading a *slog.Logger through
+	// every call site.
+	var logHandler slog.Handler
+	switch cfg.logFormat {
+	case "json":
+		logHandler = slog.NewJSONHandler(os.Stdout, nil)
+	default: // "text" — the only other value parseLogFormat accepts
+		logHandler = slog.NewTextHandler(os.Stdout, nil)
+	}
+	slog.SetDefault(slog.New(logHandler))
+
+	slog.Info("configuration loaded",
+		"component", "config",
+		"port", cfg.port,
+		"tenant_base_domain", cfg.tenantBaseDomain,
+		"cache_ttl_seconds", int(cfg.cacheTTL.Seconds()),
+		"log_format", cfg.logFormat,
 	)
 
 	// 1. Store — in-memory source of truth for this demonstration.
@@ -135,12 +157,20 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("listening on %s", addr)
-		log.Printf(`try: curl -H "Host: acme.%s" http://localhost:%d/api/me`, cfg.tenantBaseDomain, cfg.port)
-		log.Printf(`try: curl -H "Host: globex.%s" http://localhost:%d/api/users  (expects 403 — globex only has users:read)`, cfg.tenantBaseDomain, cfg.port)
+		// The two example curl commands are folded into fields, rather
+		// than printed as separate free-form lines, so they stay part of
+		// the same structured event under LOG_FORMAT=json instead of
+		// becoming stray unstructured output mixed into a JSON stream.
+		slog.Info("server listening",
+			"component", "server",
+			"addr", addr,
+			"example_me", fmt.Sprintf(`curl -H "Host: acme.%s" http://localhost:%d/api/me`, cfg.tenantBaseDomain, cfg.port),
+			"example_users", fmt.Sprintf(`curl -H "Host: globex.%s" http://localhost:%d/api/users`, cfg.tenantBaseDomain, cfg.port),
+		)
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			slog.Error("server error", "component", "server", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -157,7 +187,10 @@ func main() {
 	ready.Store(false)
 
 	stop()
-	log.Println("shutdown signal received")
+	// signal.NotifyContext only cancels ctx on either signal; it doesn't
+	// expose which one actually fired, so this can't name it without
+	// switching to a manual signal.Notify channel instead.
+	slog.Info("shutdown signal received", "component", "shutdown")
 
 	// Server.Shutdown already refuses new connections and waits for
 	// in-flight requests to finish on its own — this timeout only bounds
@@ -165,19 +198,20 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	log.Println("shutting down server...")
+	slog.Info("shutting down server", "component", "shutdown")
 	err = server.Shutdown(shutdownCtx)
 
 	switch {
 	case err == nil:
-		log.Println("server shut down cleanly")
+		slog.Info("server shut down cleanly", "component", "shutdown")
 	case errors.Is(shutdownCtx.Err(), context.DeadlineExceeded):
 		// Shutdown() returns ctx.Err() in this case (i.e. this same
 		// DeadlineExceeded) — not a fatal condition, just a clear warning
 		// that some in-flight requests may not have finished before we
 		// gave up waiting.
-		log.Printf("WARNING: shutdown did not complete within %s, exiting anyway", shutdownTimeout)
+		slog.Warn("shutdown did not complete within timeout", "component", "shutdown", "timeout", shutdownTimeout)
 	default:
-		log.Fatalf("shutdown error: %v", err)
+		slog.Error("shutdown error", "component", "shutdown", "error", err)
+		os.Exit(1)
 	}
 }

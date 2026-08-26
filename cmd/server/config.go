@@ -11,6 +11,7 @@ const (
 	defaultPort             = 8080
 	defaultTenantBaseDomain = "localhost"
 	defaultCacheTTLSeconds  = 10
+	defaultLogFormat        = "text"
 )
 
 // serverConfig holds the reference server's runtime configuration, resolved
@@ -19,11 +20,12 @@ type serverConfig struct {
 	port             int
 	tenantBaseDomain string
 	cacheTTL         time.Duration
+	logFormat        string
 }
 
-// loadServerConfig resolves PORT, TENANT_BASE_DOMAIN, and CACHE_TTL_SECONDS
-// from the environment. A variable that is absent uses its default; a
-// variable that is present but invalid (including empty) is a
+// loadServerConfig resolves PORT, TENANT_BASE_DOMAIN, CACHE_TTL_SECONDS, and
+// LOG_FORMAT from the environment. A variable that is absent uses its
+// default; a variable that is present but invalid (including empty) is a
 // configuration error. Returning the error, rather than calling
 // log.Fatalf directly, keeps this function testable in isolation — main()
 // is responsible for treating a non-nil error as fatal.
@@ -43,10 +45,16 @@ func loadServerConfig() (serverConfig, error) {
 		return serverConfig{}, err
 	}
 
+	logFormat, err := parseLogFormat()
+	if err != nil {
+		return serverConfig{}, err
+	}
+
 	return serverConfig{
 		port:             port,
 		tenantBaseDomain: domain,
 		cacheTTL:         time.Duration(ttlSeconds) * time.Second,
+		logFormat:        logFormat,
 	}, nil
 }
 
@@ -92,4 +100,18 @@ func parseCacheTTLSeconds() (int, error) {
 		return 0, fmt.Errorf("invalid CACHE_TTL_SECONDS: %q (must be a positive integer)", raw)
 	}
 	return seconds, nil
+}
+
+// parseLogFormat resolves LOG_FORMAT: absent -> defaultLogFormat; present ->
+// must be exactly "text" or "json".
+func parseLogFormat() (string, error) {
+	raw, present := os.LookupEnv("LOG_FORMAT")
+	if !present {
+		return defaultLogFormat, nil
+	}
+
+	if raw != "text" && raw != "json" {
+		return "", fmt.Errorf(`invalid LOG_FORMAT: %q (must be "text" or "json")`, raw)
+	}
+	return raw, nil
 }

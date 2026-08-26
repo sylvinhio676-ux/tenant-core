@@ -98,6 +98,33 @@ func TestParseCacheTTLSeconds_Invalid(t *testing.T) {
 	}
 }
 
+func TestParseLogFormat_AbsentUsesDefault(t *testing.T) {
+	format, err := parseLogFormat()
+	require.NoError(t, err)
+	assert.Equal(t, defaultLogFormat, format)
+}
+
+func TestParseLogFormat_ValidValue(t *testing.T) {
+	t.Setenv("LOG_FORMAT", "json")
+
+	format, err := parseLogFormat()
+	require.NoError(t, err)
+	assert.Equal(t, "json", format)
+}
+
+func TestParseLogFormat_Invalid(t *testing.T) {
+	cases := []string{"xml", "TEXT", "JSON", "", "yaml"}
+
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("LOG_FORMAT", raw)
+
+			_, err := parseLogFormat()
+			assert.Error(t, err)
+		})
+	}
+}
+
 func TestLoadServerConfig_AllAbsentUsesDefaults(t *testing.T) {
 	cfg, err := loadServerConfig()
 	require.NoError(t, err)
@@ -105,6 +132,7 @@ func TestLoadServerConfig_AllAbsentUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultPort, cfg.port)
 	assert.Equal(t, defaultTenantBaseDomain, cfg.tenantBaseDomain)
 	assert.Equal(t, time.Duration(defaultCacheTTLSeconds)*time.Second, cfg.cacheTTL)
+	assert.Equal(t, defaultLogFormat, cfg.logFormat)
 }
 
 func TestLoadServerConfig_PropagatesFirstInvalidVariable(t *testing.T) {

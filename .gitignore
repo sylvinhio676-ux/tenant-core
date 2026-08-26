@@ -5,6 +5,13 @@
 *.so
 *.dylib
 
+# Locally built root-level binaries (e.g. `go build -o server ./cmd/server`
+# or `go build -o healthcheck ./cmd/healthcheck` run from the repo root).
+# Anchored with a leading slash so this only matches these exact files at
+# the repo root, not the cmd/server/ or cmd/healthcheck/ source directories.
+/server
+/healthcheck
+
 # Fichiers de test
 *.test
 *.out

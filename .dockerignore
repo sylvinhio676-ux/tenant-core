@@ -1,0 +1,36 @@
+# Version control and editor/IDE metadata — never needed inside the build.
+.git/
+.github/
+.claude/
+.vscode/
+.idea/
+
+# Documentation — not used by the Dockerfile, no reason to send it in the
+# build context (README.md is tiny and harmless, but the generated docs
+# tree and its own build artifacts are not).
+docs/
+
+# Load testing tooling and its (machine-specific, gitignored) results —
+# entirely unrelated to building/running the server image.
+loadtest/
+
+# Local Claude Code memory/session files, if present outside .claude/.
+CLAUDE.md
+
+# Compiled binaries and build/profiling artifacts that may exist locally.
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+server
+healthcheck
+
+# Environment files that must never end up baked into an image layer.
+.env
+
+# Coverage output.
+coverage.txt
+coverage.html

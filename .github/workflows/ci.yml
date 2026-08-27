@@ -75,7 +75,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (root)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
 
@@ -88,7 +88,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (middleware/gin)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: middleware/gin
@@ -102,7 +102,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (middleware/echo)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: middleware/echo
@@ -116,7 +116,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (middleware/chi)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: middleware/chi
@@ -130,7 +130,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (eventbus/redis)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: eventbus/redis
@@ -144,7 +144,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (metrics/prometheus)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: metrics/prometheus
@@ -158,7 +158,7 @@ jobs:
         run: govulncheck ./...
 
       - name: golangci-lint (ratelimit/redis)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: ratelimit/redis

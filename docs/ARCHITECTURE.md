@@ -1,5 +1,7 @@
 # tenant-core — Architecture and complete technical documentation
 
+🇬🇧 English · [🇫🇷 Français](ARCHITECTURE.fr.md)
+
 > Native Go multi-tenancy toolkit: resolution, context isolation, cache, real-time ban propagation, rate limiting, RBAC, metrics, Admin API, and multi-instance propagation — distributed as a middleware library compatible with existing Go routers.
 
 ---

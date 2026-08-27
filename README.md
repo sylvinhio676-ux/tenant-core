@@ -1,5 +1,7 @@
 # tenant-core
 
+🇬🇧 English · [🇫🇷 Français](README.fr.md)
+
 > Multi-tenancy toolkit for Go — resolve, isolate, and observe tenants natively in your HTTP stack.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/sylvinhio676-ux/tenant-core.svg)](https://pkg.go.dev/github.com/sylvinhio676-ux/tenant-core)

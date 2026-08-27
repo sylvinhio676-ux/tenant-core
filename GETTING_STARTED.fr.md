@@ -1,13 +1,14 @@
 # Getting started
 
-🇬🇧 English · [🇫🇷 Français](GETTING_STARTED.fr.md)
+[🇬🇧 English](GETTING_STARTED.md) · 🇫🇷 Français
 
-A practical guide to integrating tenant-core into your own project, step by
-step. Each tier works on its own — you can stop at any one of them and have
-something functional. To understand the architectural decisions behind each
-component (concurrency, trade-offs, guarantees), see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — this document is "how-to"
-only.
+Guide pratique pour intégrer tenant-core dans votre propre projet, étape par
+étape. Chaque palier fonctionne seul — vous pouvez vous arrêter à n'importe
+lequel et avoir quelque chose de fonctionnel. Pour comprendre les décisions
+d'architecture derrière chaque composant (concurrence, trade-offs, garanties),
+voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (en anglais ; version
+française : [docs/ARCHITECTURE.fr.md](docs/ARCHITECTURE.fr.md)) — ce
+document-ci ne fait que du "comment faire".
 
 ## 1. Installation
 
@@ -15,17 +16,17 @@ only.
 go get github.com/sylvinhio676-ux/tenant-core@v0.2.0
 ```
 
-## 2. The bare minimum: resolving a tenant
+## 2. Le strict minimum : résoudre un tenant
 
-Three building blocks are enough for an HTTP request to know "which tenant"
-it belongs to:
+Trois briques suffisent pour qu'une requête HTTP sache "de quel tenant"
+elle vient :
 
-- a `Store` — where your tenants are stored (`store.MemoryStore` here, to get
-  started; in production this will be your own implementation of the
-  `tenant.Store` interface, e.g. Postgres);
-- a `Resolver` — how to identify the tenant from the request
-  (`resolver.SubdomainResolver` here, based on the subdomain);
-- a `Manager` — assembles the two, plus a middleware that uses it.
+- un `Store` — où sont stockés vos tenants (ici `store.MemoryStore`, pour
+  démarrer ; en production ce sera votre implémentation de l'interface
+  `tenant.Store`, ex. Postgres) ;
+- un `Resolver` — comment identifier le tenant depuis la requête (ici
+  `resolver.SubdomainResolver`, basé sur le sous-domaine) ;
+- un `Manager` — assemble les deux, et un middleware qui l'utilise.
 
 ```go
 package main
@@ -85,7 +86,7 @@ func main() {
 }
 ```
 
-Test it with `curl`, simulating the subdomain via the `Host` header:
+Testez avec `curl`, en simulant le sous-domaine via le header `Host` :
 
 ```bash
 curl -H "Host: acme.localhost" http://localhost:8080/whoami
@@ -95,13 +96,13 @@ curl -H "Host: unknown.localhost" http://localhost:8080/whoami
 # 404 tenant not found — the "unknown" tenant doesn't exist in the Store
 ```
 
-## 3. Adding a cache (CachedStore)
+## 3. Ajouter le cache (CachedStore)
 
-`store.CachedStore` wraps any `tenant.Store` — `MemoryStore` here, but a real
-Postgres-backed Store works identically — and adds a TTL cache plus
-deduplication (`singleflight`) of concurrent cache-miss calls for the same
-tenant. Recommended as soon as your `Get()` does a real I/O round trip (a DB
-query on every single HTTP request doesn't scale).
+`store.CachedStore` enveloppe n'importe quel `tenant.Store` — `MemoryStore`
+ici, mais un vrai Store Postgres fonctionnerait à l'identique — et ajoute un
+cache à TTL plus une déduplication (`singleflight`) des accès concurrents en
+cache miss sur le même tenant. Recommandé dès que votre `Get()` fait un vrai
+aller-retour I/O (une requête DB à chaque requête HTTP ne tient pas la charge).
 
 ```go
 cachedStore := store.NewCachedStore(memStore, 30*time.Second)
@@ -112,13 +113,14 @@ manager := tenant.New(
 )
 ```
 
-That's the only change needed — `CachedStore` implements `tenant.Store`
-itself, so `Manager` sees no difference. One caveat: a tenant state change
-(disabling, etc.) takes up to `ttl` to propagate through this cache. For bans,
-which must be instant, see `banchecker` and `eventbus` in
+C'est le seul changement nécessaire — `CachedStore` implémente lui-même
+`tenant.Store`, donc `Manager` ne voit aucune différence. Point d'attention :
+un changement d'état du tenant (désactivation, etc.) met jusqu'à `ttl` pour se
+propager à travers ce cache. Pour les bannissements, qui doivent être
+immédiats, voir `banchecker` et `eventbus` dans
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## 4. Adding permissions (RBAC)
+## 4. Ajouter les permissions (RBAC)
 
 ```go
 authz := rbac.New()
@@ -142,14 +144,15 @@ mux.HandleFunc("GET /users", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-Don't forget to populate `Roles` on your tenants (`&tenant.Tenant{ID: "acme",
-State: tenant.Active, Roles: []string{"admin"}}`) — without it, `Can` always
-returns `false`.
+N'oubliez pas de peupler `Roles` sur vos tenants (`&tenant.Tenant{ID: "acme",
+State: tenant.Active, Roles: []string{"admin"}}`) — sans ça, `Can` retournera
+toujours `false`.
 
-Important reminder: roles are defined **per tenant** — `"admin"` at `acme`
-implies nothing at `globex`. There is no global role namespace.
+Rappel important : les rôles sont définis **par tenant** — `"admin"` chez
+`acme` n'implique rien chez `globex`. Il n'existe pas d'espace de noms de
+rôles global.
 
-## 5. Rate limiting (RateLimiter)
+## 5. Limiter le débit (RateLimiter)
 
 ```go
 // LimitFunc decides the requests-per-second quota per tenant. Here a
@@ -176,12 +179,13 @@ mux.HandleFunc("GET /limited", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-`TenantRateLimiter` keeps its state in local process memory, per instance. If
-you run multiple instances behind a load balancer and want a quota shared
-across them, see the [`ratelimit/redis`](ratelimit/redis/go.mod) submodule
-(details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) — not covered here.
+`TenantRateLimiter` est en mémoire locale, par instance. Si vous tournez
+plusieurs instances derrière un load balancer et voulez un quota partagé
+entre elles, voir le sous-module
+[`ratelimit/redis`](ratelimit/redis/go.mod) (détails dans
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) — non couvert ici.
 
-## 6. Administering tenants (Admin API)
+## 6. Administrer les tenants (Admin API)
 
 ```go
 package main
@@ -219,9 +223,9 @@ curl -X PATCH http://localhost:9090/tenants/acme/ban
 # 204 No Content
 ```
 
-**Important**: without `admin.WithAuthenticator(...)`, this API is **not
-protected** — anyone can ban/disable/reactivate any tenant. Configure an
-`Authenticator` before any exposed deployment:
+**Important** : sans `admin.WithAuthenticator(...)`, cette API n'est **pas
+protégée** — n'importe qui peut bannir/désactiver/réactiver n'importe quel
+tenant. Configurez un `Authenticator` avant tout déploiement exposé :
 
 ```go
 adminHandler := admin.NewHTTPHandler(
@@ -230,15 +234,16 @@ adminHandler := admin.NewHTTPHandler(
 )
 ```
 
-Full details (JWT, API key, mTLS... tenant-core provides no concrete
-implementation — that's your application's responsibility to supply) in
+Détails complets (JWT, API key, mTLS... tenant-core ne fournit aucune
+implémentation concrète, c'est à votre application de la fournir) dans
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## 7. What if you're using Gin / Echo / Chi?
+## 7. Et si vous utilisez Gin / Echo / Chi ?
 
-Resolver and Store stay exactly the same — only the middleware line changes.
+Resolver et Store restent strictement identiques — seule la ligne de
+middleware change.
 
-**Gin**:
+**Gin** :
 
 ```bash
 go get github.com/sylvinhio676-ux/tenant-core/middleware/gin@v0.1.0
@@ -251,7 +256,7 @@ r := gin.Default()
 r.Use(ginmw.Middleware(manager))
 ```
 
-**Echo**:
+**Echo** :
 
 ```bash
 go get github.com/sylvinhio676-ux/tenant-core/middleware/echo@v0.1.0
@@ -264,7 +269,7 @@ e := echo.New()
 e.Use(echomw.Middleware(manager))
 ```
 
-**Chi**:
+**Chi** :
 
 ```bash
 go get github.com/sylvinhio676-ux/tenant-core/middleware/chi@v0.1.0
@@ -277,16 +282,16 @@ r := chi.NewRouter()
 r.Use(chimw.Middleware(manager))
 ```
 
-## 8. Going further
+## 8. Aller plus loin
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — understand the full
-  architecture (rationale, concurrency, trade-offs, known limitations).
-- [`eventbus/redis`](eventbus/redis) — event propagation (bans, etc.) across
-  multiple instances via Redis Pub/Sub.
-- [`metrics/prometheus`](metrics/prometheus) — observability (tenant-scoped
-  metrics exposed in Prometheus format).
-- [`cmd/server/main.go`](cmd/server/main.go) — a complete example wiring up
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — comprendre l'architecture
+  complète (rationale, concurrence, trade-offs, limites connues).
+- [`eventbus/redis`](eventbus/redis) — propagation d'événements (bannissement,
+  etc.) entre plusieurs instances via Redis Pub/Sub.
+- [`metrics/prometheus`](metrics/prometheus) — observabilité (métriques
+  tenant-scoped exposées au format Prometheus).
+- [`cmd/server/main.go`](cmd/server/main.go) — exemple complet assemblant
   Resolver + CachedStore + RBAC + graceful shutdown + healthchecks.
-- The current tag is `v0.2.0` — the API **is not yet stabilized at
-  v1.0.0**. Check the release notes before upgrading; a breaking change
-  remains possible before the first `v1.0.0`.
+- Le tag actuel est `v0.2.0` — l'API **n'est pas encore stabilisée en
+  v1.0.0**. Consultez les notes de version avant toute mise à jour, une
+  rupture de compatibilité reste possible avant le premier `v1.0.0`.

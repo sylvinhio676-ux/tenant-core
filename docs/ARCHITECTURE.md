@@ -350,9 +350,11 @@ The three states have distinct business meanings:
 type Tenant struct {
     ID    TenantID
     State State
-    Roles []string
+    Roles []Role
 }
 ```
+
+`Role` (like `TenantID`) is a dedicated named `string` type rather than a plain `string` — added in v0.3.0 for the same type-safety reason, and living in this root package (not in `rbac`, its main consumer) specifically because `Tenant.Roles` needs it here, and the established dependency direction is `tenant → rbac`, never the reverse.
 
 ```text
 Tenant
@@ -1838,7 +1840,7 @@ RBAC (security/authorization) and Metrics (observability) are independent and mu
 
 ### 8.3 Part 1 — RBAC
 
-**Principle.** *Role-Based Access Control.* Instead of hardcoding *"Sylvinhio can do X"*, we define `Role → Permissions`, and a tenant then has one or more roles — via the `Roles []string` field already present on `Tenant` since Step 1.
+**Principle.** *Role-Based Access Control.* Instead of hardcoding *"Sylvinhio can do X"*, we define `Role → Permissions`, and a tenant then has one or more roles — via the `Roles []Role` field already present on `Tenant` since Step 1.
 
 **Concrete example**
 
@@ -3423,7 +3425,7 @@ ctx := tenanttest.WithFakeTenantFull(
     &tenant.Tenant{
         ID:    "tenant-admin",
         State: tenant.Active,
-        Roles: []string{"admin", "manager"},
+        Roles: []tenant.Role{"admin", "manager"},
     },
 )
 ```
@@ -3523,7 +3525,7 @@ ctx := tenanttest.WithFakeTenantFull(
     &tenant.Tenant{
         ID:    "tenant-abc",
         State: tenant.Active,
-        Roles: []string{"admin"},
+        Roles: []tenant.Role{"admin"},
     },
 )
 ```
@@ -3965,7 +3967,7 @@ This section gathers all the limitations **explicitly documented** along the way
 | Admin API — endpoints | `Ban`/`Disable`/`Activate` only | No HTTP `Create`/`Get`, even though `AdminStore.Create` and `Store.Get` exist | Add `Service.Create`/`Service.Get` first, then the corresponding endpoints, if the business need arises |
 | `EventBus` (Redis) | Functional Pub/Sub, fail-fast on subscribe, `Stop()` for clean shutdown | None — reconnection and resubscription on transient network failures are handled natively by go-redis's `*redis.PubSub` (automatic reconnect + periodic health-check ping, see §10.16); this was previously listed here as a gap based on an unverified assumption, corrected after reading the go-redis source | n/a |
 | `Redis` | Real-time propagation operational | No dedicated monitoring or propagation-latency metrics (connection resilience itself is already handled by go-redis, see above) | Dedicated monitoring, propagation latency metrics |
-| `MemoryStore.Get()` — copy | Shallow copy of `*Tenant` | The `Roles []string` field shares the same underlying array as the original; a consumer mutating `Roles[i]` would still affect the original | Deep copy of the `Roles` slice if this risk becomes significant |
+| `MemoryStore.Get()` — copy | Shallow copy of `*Tenant` | The `Roles []Role` field shares the same underlying array as the original; a consumer mutating `Roles[i]` would still affect the original | Deep copy of the `Roles` slice if this risk becomes significant |
 | `RedisEventBus` tests | Covered via `miniredis` (simulation) | `miniredis` doesn't guarantee every subtlety of a real Redis server | Integration test with a real Redis, as a complement, not a replacement |
 | `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | No full HTTP pipeline simulation | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — only if a real need arises |
 | `Prometheus` (Metrics) | `MetricsCollector` interface defined + in-memory implementation | No concrete Prometheus adapter built at this stage | `PrometheusMetrics` implementation satisfying the same contract |
@@ -4086,7 +4088,7 @@ type Authorizer interface {
 }
 ```
 
-The implementation adopted is a concrete `RBAC` type (not an interface published in `tenant.go`), with a `DefineRole(tenantID, role, permissions)` method for registration, and `Can(t *Tenant, permission string) bool` for checking — definitions being organized **per tenant** (`map[TenantID]map[role]map[permission]struct{}`), as faithfully described in the source document (section 8.5 of this document). The principle (role/permission separation, per-tenant independence, no HTTP dependency) is identical.
+The implementation adopted is a concrete `RBAC` type (not an interface published in `tenant.go`), with a `DefineRole(tenantID, role, permissions)` method for registration, and `Can(t *Tenant, permission string) bool` for checking — definitions being organized **per tenant** (`map[TenantID]map[role]map[permission]struct{}`), as faithfully described in the source document (section 8.5 of this document). The principle (role/permission separation, per-tenant independence, no HTTP dependency) is identical. (Since v0.3.0, `permission`/`permissions` are typed as `rbac.Permission` — a named `string` type, for the same type-safety reason as `tenant.TenantID` — rather than a plain `string`/`[]string`; `DefineRole` also became variadic, and its `role` parameter (along with `Tenant.Roles`) is typed as `tenant.Role`, defined in the root package rather than in `rbac` to keep the established `tenant → rbac` dependency direction. A string literal like `"users:write"` or `"admin"` still works unchanged at every call site thanks to Go's implicit untyped-constant conversion. This is a breaking change for callers passing a `string`/`[]string` variable rather than a literal — see `CHANGELOG.md`.)
 
 ### 18.3 Metrics — Prometheus mentioned as done vs. actual status
 

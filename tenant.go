@@ -8,6 +8,18 @@ import (
 
 type TenantID string
 
+// Role names a capability grouping that can be attached to a Tenant and
+// checked by the rbac package. This type lives here, in the root package,
+// rather than in rbac — even though rbac is its primary consumer — for the
+// same reason TenantID does: Tenant.Roles needs it, and the dependency
+// direction established throughout this toolkit is tenant → rbac, never the
+// reverse. Defining Role in rbac would force this root package to import
+// rbac just to type its own Tenant.Roles field, creating an import cycle.
+// A string literal like "admin" can still be passed directly wherever a
+// Role is expected, since Go implicitly converts an untyped string
+// constant to any named string type.
+type Role string
+
 // State represents the state of a tenant.
 type State string
 
@@ -26,7 +38,7 @@ const (
 type Tenant struct {
 	ID    TenantID
 	State State
-	Roles []string
+	Roles []Role
 }
 
 // Resolver identifies the tenant from an incoming HTTP request.

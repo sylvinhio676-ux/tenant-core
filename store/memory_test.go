@@ -95,13 +95,13 @@ func TestMemoryStore_Update(t *testing.T) {
 
 	ms.set(&tenant.Tenant{ID: "tenant-A", State: tenant.Active})
 
-	err = ms.Update(context.Background(), &tenant.Tenant{ID: "tenant-A", State: tenant.Disabled, Roles: []string{"admin"}})
+	err = ms.Update(context.Background(), &tenant.Tenant{ID: "tenant-A", State: tenant.Disabled, Roles: []tenant.Role{"admin"}})
 	assert.NoError(t, err)
 
 	got, err := ms.Get(context.Background(), "tenant-A")
 	assert.NoError(t, err)
 	assert.Equal(t, tenant.Disabled, got.State)
-	assert.Equal(t, []string{"admin"}, got.Roles)
+	assert.Equal(t, []tenant.Role{"admin"}, got.Roles)
 }
 
 func TestMemoryStore_SetState(t *testing.T) {

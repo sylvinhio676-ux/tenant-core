@@ -124,8 +124,8 @@ immédiats, voir `banchecker` et `eventbus` dans
 
 ```go
 authz := rbac.New()
-authz.DefineRole("acme", "admin", []string{"users:read", "users:write"})
-authz.DefineRole("globex", "viewer", []string{"users:read"})
+authz.DefineRole("acme", "admin", "users:read", "users:write")
+authz.DefineRole("globex", "viewer", "users:read")
 
 mux.HandleFunc("GET /users", func(w http.ResponseWriter, r *http.Request) {
 	t := tenantctx.FromContext(r.Context())
@@ -145,7 +145,7 @@ mux.HandleFunc("GET /users", func(w http.ResponseWriter, r *http.Request) {
 ```
 
 N'oubliez pas de peupler `Roles` sur vos tenants (`&tenant.Tenant{ID: "acme",
-State: tenant.Active, Roles: []string{"admin"}}`) — sans ça, `Can` retournera
+State: tenant.Active, Roles: []tenant.Role{"admin"}}`) — sans ça, `Can` retournera
 toujours `false`.
 
 Rappel important : les rôles sont définis **par tenant** — `"admin"` chez

@@ -26,9 +26,9 @@ func main() {
 	// Fixed, hardcoded IDs known not to collide — Create failing here would
 	// be a programming bug in this load-test server, not a runtime
 	// condition worth handling.
-	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active, Roles: []string{"admin"}})
-	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active, Roles: []string{"viewer"}})
-	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active, Roles: []string{"viewer"}})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active, Roles: []tenant.Role{"admin"}})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active, Roles: []tenant.Role{"viewer"}})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active, Roles: []tenant.Role{"viewer"}})
 
 	cachedStore := store.NewCachedStore(memStore, 10*time.Second)
 
@@ -40,9 +40,9 @@ func main() {
 	)
 
 	authz := rbac.New()
-	authz.DefineRole("acme", "admin", []string{"users:read", "users:write"})
-	authz.DefineRole("globex", "viewer", []string{"users:read"})
-	authz.DefineRole("initech", "viewer", []string{"users:read"})
+	authz.DefineRole("acme", "admin", "users:read", "users:write")
+	authz.DefineRole("globex", "viewer", "users:read")
+	authz.DefineRole("initech", "viewer", "users:read")
 
 	mux := http.NewServeMux()
 

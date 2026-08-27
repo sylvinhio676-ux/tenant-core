@@ -25,7 +25,7 @@ func TestWithFakeTenantFull(t *testing.T) {
 	expected := &tenant.Tenant{
 		ID:    "tenant-admin",
 		State: tenant.Active,
-		Roles: []string{"admin", "manager"},
+		Roles: []tenant.Role{"admin", "manager"},
 	}
 
 	ctx := WithFakeTenantFull(context.Background(), expected)

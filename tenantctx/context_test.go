@@ -42,7 +42,7 @@ func TestTenantContext_Isolated(t *testing.T) {
 	assert.Equal(t, tenant.TenantID("tenant-B"), gotB.ID)
 
 	// Mutate via WHAT THE CONTEXT RETURNED, not the original variable
-	gotA.Roles = []string{"admin"}
+	gotA.Roles = []tenant.Role{"admin"}
 
 	// gotB (retrieved from ctxB) must never see this change
 	assert.Nil(t, gotB.Roles)

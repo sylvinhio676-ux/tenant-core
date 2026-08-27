@@ -350,9 +350,11 @@ Les trois états ont des significations métier distinctes :
 type Tenant struct {
     ID    TenantID
     State State
-    Roles []string
+    Roles []Role
 }
 ```
+
+`Role` (comme `TenantID`) est un type nommé `string` dédié plutôt qu'un simple `string` — ajouté en v0.3.0 pour la même raison de sécurité de typage, et vivant dans ce package racine (pas dans `rbac`, son principal consommateur) précisément parce que `Tenant.Roles` en a besoin ici, et que la direction de dépendance établie est `tenant → rbac`, jamais l'inverse.
 
 ```text
 Tenant
@@ -1838,7 +1840,7 @@ RBAC (sécurité/autorisation) et Metrics (observabilité) sont indépendants et
 
 ### 8.3 Partie 1 — RBAC
 
-**Principe.** *Role-Based Access Control.* Plutôt que de coder en dur *« Sylvinhio peut faire X »*, on définit `Rôle → Permissions`, et un tenant a alors un ou plusieurs rôles — via le champ `Roles []string` déjà présent sur `Tenant` depuis l'étape 1.
+**Principe.** *Role-Based Access Control.* Plutôt que de coder en dur *« Sylvinhio peut faire X »*, on définit `Rôle → Permissions`, et un tenant a alors un ou plusieurs rôles — via le champ `Roles []Role` déjà présent sur `Tenant` depuis l'étape 1.
 
 **Exemple concret**
 
@@ -3423,7 +3425,7 @@ ctx := tenanttest.WithFakeTenantFull(
     &tenant.Tenant{
         ID:    "tenant-admin",
         State: tenant.Active,
-        Roles: []string{"admin", "manager"},
+        Roles: []tenant.Role{"admin", "manager"},
     },
 )
 ```
@@ -3523,7 +3525,7 @@ ctx := tenanttest.WithFakeTenantFull(
     &tenant.Tenant{
         ID:    "tenant-abc",
         State: tenant.Active,
-        Roles: []string{"admin"},
+        Roles: []tenant.Role{"admin"},
     },
 )
 ```
@@ -3965,7 +3967,7 @@ Cette section rassemble toutes les limitations **explicitement documentées** en
 | API Admin — endpoints | `Ban`/`Disable`/`Activate` seulement | Pas de `Create`/`Get` HTTP, même si `AdminStore.Create` et `Store.Get` existent | Ajouter d'abord `Service.Create`/`Service.Get`, puis les endpoints correspondants, si le besoin métier survient |
 | `EventBus` (Redis) | Pub/Sub fonctionnel, fail-fast sur subscribe, `Stop()` pour un arrêt propre | Aucune — la reconnexion et le réabonnement sur des pannes réseau transitoires sont gérés nativement par le `*redis.PubSub` de go-redis (reconnexion automatique + ping de santé périodique, voir §10.16) ; ceci était listé ici précédemment comme une lacune basée sur une hypothèse non vérifiée, corrigée après lecture du code source de go-redis | n/a |
 | `Redis` | Propagation en temps réel opérationnelle | Pas de monitoring dédié ni de métriques de latence de propagation (la résilience de connexion elle-même est déjà gérée par go-redis, voir ci-dessus) | Monitoring dédié, métriques de latence de propagation |
-| `MemoryStore.Get()` — copie | Copie superficielle (shallow) du `*Tenant` | Le champ `Roles []string` partage le même tableau sous-jacent que l'original ; un consommateur mutant `Roles[i]` affecterait quand même l'original | Copie profonde (deep copy) du slice `Roles` si ce risque devient significatif |
+| `MemoryStore.Get()` — copie | Copie superficielle (shallow) du `*Tenant` | Le champ `Roles []Role` partage le même tableau sous-jacent que l'original ; un consommateur mutant `Roles[i]` affecterait quand même l'original | Copie profonde (deep copy) du slice `Roles` si ce risque devient significatif |
 | Tests `RedisEventBus` | Couverts via `miniredis` (simulation) | `miniredis` ne garantit pas toutes les subtilités d'un vrai serveur Redis | Test d'intégration avec un vrai Redis, en complément, pas en remplacement |
 | `tenanttest` | `WithFakeTenant` / `WithFakeTenantFull` | Pas de simulation complète du pipeline HTTP | `NewFakeResolver`, `NewFakeStore`, `NewFakeManager` — seulement si un vrai besoin survient |
 | `Prometheus` (Metrics) | Interface `MetricsCollector` définie + implémentation en mémoire | Aucun adaptateur Prometheus concret construit à ce stade | Implémentation `PrometheusMetrics` satisfaisant le même contrat |
@@ -4086,7 +4088,7 @@ type Authorizer interface {
 }
 ```
 
-L'implémentation adoptée est un type concret `RBAC` (pas une interface publiée dans `tenant.go`), avec une méthode `DefineRole(tenantID, role, permissions)` pour l'enregistrement, et `Can(t *Tenant, permission string) bool` pour la vérification — les définitions étant organisées **par tenant** (`map[TenantID]map[role]map[permission]struct{}`), comme fidèlement décrit dans le document source (section 8.5 de ce document). Le principe (séparation rôle/permission, indépendance par tenant, aucune dépendance HTTP) est identique.
+L'implémentation adoptée est un type concret `RBAC` (pas une interface publiée dans `tenant.go`), avec une méthode `DefineRole(tenantID, role, permissions)` pour l'enregistrement, et `Can(t *Tenant, permission string) bool` pour la vérification — les définitions étant organisées **par tenant** (`map[TenantID]map[role]map[permission]struct{}`), comme fidèlement décrit dans le document source (section 8.5 de ce document). Le principe (séparation rôle/permission, indépendance par tenant, aucune dépendance HTTP) est identique. (Depuis la v0.3.0, `permission`/`permissions` sont typés `rbac.Permission` — un type nommé `string`, pour la même raison de sécurité de typage que `tenant.TenantID` — plutôt qu'un simple `string`/`[]string` ; `DefineRole` est aussi devenu variadique, et son paramètre `role` (ainsi que `Tenant.Roles`) est typé `tenant.Role`, défini dans le package racine plutôt que dans `rbac` pour préserver la direction de dépendance `tenant → rbac` déjà établie. Une chaîne littérale comme `"users:write"` ou `"admin"` continue de fonctionner sans changement sur chaque appel grâce à la conversion implicite des constantes non typées de Go. C'est un breaking change pour les appelants qui passent une variable `string`/`[]string` plutôt qu'un littéral — voir `CHANGELOG.md`.)
 
 ### 18.3 Metrics — Prometheus mentionné comme fait vs. statut réel
 

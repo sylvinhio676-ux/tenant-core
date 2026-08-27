@@ -72,12 +72,12 @@ func main() {
 	_ = memStore.Create(context.Background(), &tenant.Tenant{
 		ID:    "acme",
 		State: tenant.Active,
-		Roles: []string{"admin"},
+		Roles: []tenant.Role{"admin"},
 	})
 	_ = memStore.Create(context.Background(), &tenant.Tenant{
 		ID:    "globex",
 		State: tenant.Active,
-		Roles: []string{"viewer"},
+		Roles: []tenant.Role{"viewer"},
 	})
 
 	cachedStore := store.NewCachedStore(memStore, cfg.cacheTTL)
@@ -94,8 +94,8 @@ func main() {
 
 	// 4. RBAC — demonstration of permissions that differ per tenant.
 	authz := rbac.New()
-	authz.DefineRole("acme", "admin", []string{"users:read", "users:write"})
-	authz.DefineRole("globex", "viewer", []string{"users:read"})
+	authz.DefineRole("acme", "admin", "users:read", "users:write")
+	authz.DefineRole("globex", "viewer", "users:read")
 
 	// 5. Application routes.
 	mux := http.NewServeMux()

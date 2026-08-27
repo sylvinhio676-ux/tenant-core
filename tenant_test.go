@@ -34,7 +34,7 @@ func TestManager_Resolve(t *testing.T) {
 	expected := &Tenant{
 		ID:    "tenant-A",
 		State: Active,
-		Roles: []string{"admin"},
+		Roles: []Role{"admin"},
 	}
 
 	resolver := &fakeResolver{id: "tenant-A"}

@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    # gosimple no longer exists as a separate linter in golangci-lint v2 —
+    # it was merged into staticcheck, which now runs all of gosimple's
+    # "S" checks plus stylecheck's "ST" checks by default alongside its
+    # own "SA" checks. Enabling staticcheck alone covers it.
+
+# Defaults cap output at 50 issues per linter and 3 occurrences of the
+# "same" issue text — meant to keep noisy first-time runs readable, but it
+# silently truncates real findings depending on file scan order (verified
+# empirically: two consecutive full runs on this repo reported different
+# subsets of the same underlying errcheck violations). CI must see every
+# finding, not a sample, so both caps are disabled.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

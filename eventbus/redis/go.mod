@@ -1,6 +1,6 @@
 module github.com/sylvinhio676-ux/tenant-core/eventbus/redis
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0

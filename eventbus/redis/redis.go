@@ -60,7 +60,7 @@ func (b *RedisEventBus) Subscribe(handler func(eventbus.TenantEvent)) error {
 	// an error if Redis is unreachable — unlike Subscribe()
 	// which guarantees nothing synchronously.
 	if _, err := pubsub.Receive(context.Background()); err != nil {
-		pubsub.Close() // avoid leaking the underlying connection on failure
+		_ = pubsub.Close() // avoid leaking the underlying connection on failure
 		return err
 	}
 
@@ -73,7 +73,7 @@ func (b *RedisEventBus) Subscribe(handler func(eventbus.TenantEvent)) error {
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
-		pubsub.Close()
+		_ = pubsub.Close()
 		return ErrStopped
 	}
 	b.pubsubs = append(b.pubsubs, pubsub)

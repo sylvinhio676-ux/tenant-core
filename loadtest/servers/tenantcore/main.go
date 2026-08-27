@@ -32,9 +32,12 @@ func main() {
 	// Several tenants are seeded even though a single-tenant run only
 	// ever targets "acme" — this leaves the store ready for a future
 	// multi-tenant load scenario without changing this server.
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active})
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active})
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active})
+	// Fixed, hardcoded IDs known not to collide — Create failing here would
+	// be a programming bug in this load-test server, not a runtime
+	// condition worth handling.
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active})
 
 	cachedStore := store.NewCachedStore(memStore, 10*time.Second)
 
@@ -55,7 +58,7 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"tenant_id": string(t.ID)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tenant_id": string(t.ID)})
 	})
 
 	handler := nethttp.Wrap(manager, mux)

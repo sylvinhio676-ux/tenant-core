@@ -66,12 +66,15 @@ func main() {
 	// 1. Store — in-memory source of truth for this demonstration.
 	memStore := store.NewMemoryStore()
 
-	memStore.Create(context.Background(), &tenant.Tenant{
+	// Fixed, hardcoded IDs known not to collide — Create failing here would
+	// be a programming bug in this reference server, not a runtime
+	// condition worth handling.
+	_ = memStore.Create(context.Background(), &tenant.Tenant{
 		ID:    "acme",
 		State: tenant.Active,
 		Roles: []string{"admin"},
 	})
-	memStore.Create(context.Background(), &tenant.Tenant{
+	_ = memStore.Create(context.Background(), &tenant.Tenant{
 		ID:    "globex",
 		State: tenant.Active,
 		Roles: []string{"viewer"},
@@ -105,7 +108,7 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tenant_id":    t.ID,
 			"tenant_state": t.State,
 			"roles":        t.Roles,
@@ -125,7 +128,7 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"message": "user list would go here"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "user list would go here"})
 	})
 
 	// 6. Middleware — injects the resolved tenant into the context of each

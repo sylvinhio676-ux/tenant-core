@@ -1,6 +1,6 @@
 module github.com/sylvinhio676-ux/tenant-core/metrics/prometheus
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/prometheus/client_golang v1.24.1

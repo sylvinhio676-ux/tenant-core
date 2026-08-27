@@ -23,9 +23,12 @@ import (
 func main() {
 	memStore := store.NewMemoryStore()
 
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active, Roles: []string{"admin"}})
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active, Roles: []string{"viewer"}})
-	memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active, Roles: []string{"viewer"}})
+	// Fixed, hardcoded IDs known not to collide — Create failing here would
+	// be a programming bug in this load-test server, not a runtime
+	// condition worth handling.
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "acme", State: tenant.Active, Roles: []string{"admin"}})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "globex", State: tenant.Active, Roles: []string{"viewer"}})
+	_ = memStore.Create(context.Background(), &tenant.Tenant{ID: "initech", State: tenant.Active, Roles: []string{"viewer"}})
 
 	cachedStore := store.NewCachedStore(memStore, 10*time.Second)
 
@@ -56,7 +59,7 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"tenant_id": string(t.ID)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tenant_id": string(t.ID)})
 	})
 
 	handler := nethttp.Wrap(manager, mux)

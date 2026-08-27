@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 	"github.com/sylvinhio676-ux/tenant-core/eventbus"
-	"github.com/stretchr/testify/assert"
 )
 
 // fakeStore is a minimal Store for testing LoadInitialBannedList
@@ -30,11 +31,12 @@ func TestBanChecker_HandlesEventDirectly(t *testing.T) {
 
 	assert.False(t, bc.IsBanned("tenant-A"))
 
-	bus.Publish(context.Background(), eventbus.TenantEvent{
+	err := bus.Publish(context.Background(), eventbus.TenantEvent{
 		TenantID:  "tenant-A",
 		State:     tenant.Banned,
 		Timestamp: time.Now(),
 	})
+	require.NoError(t, err)
 
 	// Publish() is asynchronous (goroutines): give it a short delay
 	// so the handler has time to run before checking.
@@ -47,15 +49,17 @@ func TestBanChecker_UnbanRemovesFromBannedList(t *testing.T) {
 	bus := eventbus.NewMemoryEventBus()
 	bc := New(bus)
 
-	bus.Publish(context.Background(), eventbus.TenantEvent{
+	err := bus.Publish(context.Background(), eventbus.TenantEvent{
 		TenantID: "tenant-A", State: tenant.Banned, Timestamp: time.Now(),
 	})
+	require.NoError(t, err)
 	time.Sleep(20 * time.Millisecond)
 	assert.True(t, bc.IsBanned("tenant-A"))
 
-	bus.Publish(context.Background(), eventbus.TenantEvent{
+	err = bus.Publish(context.Background(), eventbus.TenantEvent{
 		TenantID: "tenant-A", State: tenant.Active, Timestamp: time.Now(),
 	})
+	require.NoError(t, err)
 	time.Sleep(20 * time.Millisecond)
 	assert.False(t, bc.IsBanned("tenant-A"))
 }

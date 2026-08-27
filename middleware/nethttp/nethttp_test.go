@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	tenant "github.com/sylvinhio676-ux/tenant-core"
 	"github.com/sylvinhio676-ux/tenant-core/tenantctx"
-	"github.com/stretchr/testify/assert"
 )
 
 type fakeResolver struct {
@@ -47,7 +47,7 @@ func TestWrap_InjectsTenantIntoContext(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(string(got.ID)))
+		_, _ = w.Write([]byte(string(got.ID)))
 	})
 
 	handler := Wrap(manager, next)

@@ -34,7 +34,7 @@ var ready atomic.Bool
 // server itself is answering requests, regardless of readiness.
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // readyzHandler is a readiness probe: 200 while ready is true, 503 once
@@ -44,9 +44,9 @@ func readyzHandler(w http.ResponseWriter, r *http.Request) {
 
 	if !ready.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{"status": "not ready"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "not ready"})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }

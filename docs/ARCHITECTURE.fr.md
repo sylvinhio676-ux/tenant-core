@@ -3312,6 +3312,56 @@ tenant-core/
 
 **En une phrase** : l'étape 7 transforme le toolkit d'un système capable de résoudre un tenant en un système capable de gérer son cycle de vie et de propager ses changements d'état à travers plusieurs instances, tout en gardant un cœur métier indépendant de HTTP et de Redis.
 
+### 10.27 NATSEventBus — une alternative à Redis
+
+Ajouté après l'étape 7, suite à un retour communautaire (Gophers Slack), comme seconde implémentation de `eventbus.EventBus` aux côtés de `RedisEventBus` — pour les équipes dont l'infrastructure repose sur NATS plutôt que sur Redis. Même interface, même modèle de sous-module (`eventbus/nats`, son propre `go.mod`, aucun consommateur du cœur forcé d'embarquer un client NATS), mêmes garanties. Le package `eventbus` lui-même ne connaît toujours ni l'un ni l'autre : les deux sont des adaptateurs satisfaisant exactement le même contrat `EventBus` grâce au typage structurel.
+
+```text
+                 EventBus
+                    ▲
+                    │
+       ┌────────────┼────────────┐
+       │            │            │
+       ▼            ▼            ▼
+ MemoryEventBus RedisEventBus NATSEventBus
+```
+
+**Vérifié directement dans le code source réel du client, jamais supposé** — même discipline que celle appliquée à go-redis à l'étape 7 (§10.16). Vérifié directement dans `nats.go` v1.53.1 :
+
+- `GetDefaultOptions()` fixe `AllowReconnect: true`. `nats.Connect(url)` se reconnecte donc automatiquement sans option supplémentaire, avec `DefaultMaxReconnect` (60 tentatives) et `DefaultReconnectWait` (2s entre les tentatives, plus un jitter pour éviter que tous les clients ne retentent en même temps).
+- Un ping de vérification de santé périodique (`DefaultPingInterval`, 2 minutes par défaut) détecte une connexion silencieusement morte — le même rôle que joue le ping de santé de go-redis pour `RedisEventBus`.
+- Point crucial, le **réabonnement est lui aussi automatique** : `doReconnect` appelle `resendSubscriptions`, qui réémet la ligne de protocole NATS `SUB` pour chaque abonnement encore suivi sur cette connexion. Le callback d'un `*nats.Subscription` continue de recevoir des messages après une reconnexion sans aucune action de la part de ce package — exactement analogue à la réémission de `SUBSCRIBE` par go-redis après reconnexion.
+- Les options `DisconnectErrHandler`, `ReconnectHandler`, et `ClosedHandler` existent pour une application voulant observer les changements d'état de connexion, mais aucune n'est requise pour la correction — ce sont de purs hooks optionnels.
+
+**Conclusion, cohérente avec le précédent Redis** : `NATSEventBus` ne réimplémente aucune logique de backoff/reconnexion/réabonnement. Il s'appuie entièrement sur le `*nats.Conn` fourni par l'appelant via `New(conn, subject)` — le cycle de vie de la connexion et sa politique de reconnexion restent la responsabilité de l'appelant, exactement comme pour `RedisEventBus` et son `*redis.Client`.
+
+**La conception reflète `RedisEventBus` point par point** :
+
+| Préoccupation | RedisEventBus | NATSEventBus |
+|---|---|---|
+| Format de transport | JSON (`json.Marshal`/`Unmarshal`) | JSON (`json.Marshal`/`Unmarshal`) — NATS transporte lui aussi des octets bruts, pas de support natif des structures Go |
+| Fail-fast sur Subscribe | `pubsub.Receive(ctx)` bloque jusqu'à l'accusé de réception Redis, ou renvoie une erreur | `conn.Subscribe(...)` renvoie une erreur immédiatement si la connexion ne peut accepter un nouvel abonnement |
+| Isolation par handler | Une goroutine par événement reçu, protégée par `recover()` (`safeCall`) | Identique : une goroutine par événement reçu, protégée par `recover()` (`safeCall`) |
+| `Stop()` | Ferme chaque `*redis.PubSub` créé par `Subscribe` ; idempotent ; ne ferme pas le `*redis.Client` partagé | Désabonne chaque `*nats.Subscription` créé par `Subscribe` ; idempotent ; ne ferme pas le `*nats.Conn` partagé |
+| Course : `Stop()` vs. `Subscribe()` en cours | Suivi via un drapeau `stopped` revérifié sous verrou après l'étape de confirmation bloquante | Motif identique : un drapeau `stopped` revérifié sous verrou après le retour de `conn.Subscribe` |
+
+**Compromis honnêtes par rapport à Redis** (NATS n'est pas un choix strictement meilleur — c'est un choix différent) :
+
+- **Sémantique de livraison.** Le publish/subscribe « core » de NATS (utilisé ici, comme le Pub/Sub de Redis) est du best-effort sans persistance : un abonné déconnecté au moment de la publication d'un événement ne le reçoit jamais — aucun rejeu n'est possible. C'est exactement le même compromis que `RedisEventBus` fait déjà avec le Pub/Sub Redis, pas une régression propre à NATS. NATS propose une alternative persistante (JetStream, avec livraison at-least-once et rejeu), mais c'est une API et un modèle de livraison substantiellement différents, délibérément hors périmètre ici — `NATSEventBus` cible le même cas d'usage que `RedisEventBus` : un canal de propagation de bannissement immédiat et best-effort, pas un journal d'événements durable.
+- **Empreinte opérationnelle.** Quelle que soit celle de Redis ou NATS qu'une équipe fait déjà tourner en production, c'est presque certainement le bon choix — ce composant existe justement pour que ce choix n'impose pas d'adopter une seconde brique d'infrastructure juste pour la propagation d'événements.
+
+**Tests** : NATS a un équivalent direct à `miniredis` — `github.com/nats-io/nats-server/v2/server` embarque la véritable implémentation du serveur NATS en in-process (pas une simulation/un mock du protocole, un vrai serveur), démarré avec `server.NewServer(opts)` + `go srv.Start()` + `srv.ReadyForConnections(timeout)`. Combiné à `DontListen: true` et `nats.InProcessServer(srv)`, le test se connecte sans jamais ouvrir de socket TCP — une garantie in-process sans doute encore plus stricte que celle de `miniredis` (qui écoute quand même sur un socket TCP ou Unix). Cela préserve le principe de testabilité du toolkit : `go test ./...` n'a besoin d'aucun vrai serveur NATS, ni localement ni en CI.
+
+### 10.28 Résumé de l'étape 7 (étendue) — NATSEventBus
+
+| Élément | Responsabilité |
+|---|---|
+| `NATSEventBus` | Implémentation de `eventbus.EventBus` reposant sur le pub/sub « core » de NATS |
+| `eventbus/nats` | Sous-module Go séparé, même modèle que `eventbus/redis` |
+| `*nats.Conn` de `nats.go` | Possède la reconnexion et le réabonnement — vérifié, pas réimplémenté |
+| `github.com/nats-io/nats-server/v2/server` | Serveur NATS in-process pour les tests — l'équivalent NATS de `miniredis` |
+| Garantie de livraison | Best-effort, sans rejeu — même classe de garantie que le Pub/Sub Redis, pas JetStream |
+
 ---
 
 ## 11. Étape 8 — Outils de test (tenanttest)
@@ -4050,13 +4100,18 @@ tenant-core/                          (root module)
 │   ├── redis.go
 │   └── redis_test.go (miniredis)
 │
-├── .github/workflows/ci.yml          → Multi-module CI (root + 4 sub-modules)
+├── eventbus/nats/                    → NATSEventBus (SEPARATE Go sub-module)
+│   ├── go.mod        (module .../eventbus/nats)
+│   ├── nats.go
+│   └── nats_test.go (in-process nats-server)
+│
+├── .github/workflows/ci.yml          → Multi-module CI (root + 5 sub-modules)
 ├── LICENSE (MIT)
 ├── README.md
 └── .gitignore
 ```
 
-**Statut des sous-modules Go indépendants** — `middleware/gin`, `middleware/echo`, `middleware/chi`, et `eventbus/redis` ont chacun leur **propre `go.mod`**, distinct du module racine. Cette organisation garantit qu'un développeur utilisant seulement `net/http` (ou seulement Gin) n'installe **jamais** les dépendances des frameworks/technologies qu'il n'utilise pas — chaque sous-module se build et se teste indépendamment (`cd middleware/gin && go test ./...`), et la CI GitHub Actions exécute une étape dédiée par sous-module (`working-directory`), en plus de l'étape pour le module racine.
+**Statut des sous-modules Go indépendants** — `middleware/gin`, `middleware/echo`, `middleware/chi`, `eventbus/redis`, et `eventbus/nats` ont chacun leur **propre `go.mod`**, distinct du module racine. Cette organisation garantit qu'un développeur utilisant seulement `net/http` (ou seulement Gin) n'installe **jamais** les dépendances des frameworks/technologies qu'il n'utilise pas — chaque sous-module se build et se teste indépendamment (`cd middleware/gin && go test ./...`), et la CI GitHub Actions exécute une étape dédiée par sous-module (`working-directory`), en plus de l'étape pour le module racine.
 
 Chaque sous-module référence le module racine via une directive `replace ... => ../..` pendant le développement, lui permettant de pointer vers le code local avant qu'une version taguée ne soit publiée sur le dépôt public.
 

@@ -3312,6 +3312,56 @@ tenant-core/
 
 **In one sentence**: Step 7 turns the toolkit from a system able to resolve a tenant into a system able to manage its lifecycle and propagate its state changes across multiple instances, while keeping a business core independent of HTTP and Redis.
 
+### 10.27 NATSEventBus — an alternative to Redis
+
+Added after Step 7, following community feedback (Gophers Slack), as a second `eventbus.EventBus` implementation alongside `RedisEventBus` — for teams whose infrastructure is built around NATS rather than Redis. Same interface, same sub-module pattern (`eventbus/nats`, its own `go.mod`, no consumer of the core forced to pull in a NATS client), same guarantees. The `eventbus` package itself still knows nothing about either: both are adapters satisfying the exact same `EventBus` contract via structural typing.
+
+```text
+                 EventBus
+                    ▲
+                    │
+       ┌────────────┼────────────┐
+       │            │            │
+       ▼            ▼            ▼
+ MemoryEventBus RedisEventBus NATSEventBus
+```
+
+**Verified against the real client source, not assumed** — same discipline applied to go-redis in Step 7 (§10.16). Checked directly against `nats.go` v1.53.1:
+
+- `GetDefaultOptions()` sets `AllowReconnect: true`. `nats.Connect(url)` therefore reconnects automatically with no extra option required, using `DefaultMaxReconnect` (60 attempts) and `DefaultReconnectWait` (2s between attempts, plus jitter to avoid every client retrying in lockstep).
+- A periodic health-check ping (`DefaultPingInterval`, 2 minutes by default) detects a silently dead connection — the same role go-redis's own health-check ping plays for `RedisEventBus`.
+- Critically, **resubscription is automatic too**: `doReconnect` calls `resendSubscriptions`, which re-issues the NATS `SUB` protocol line for every subscription still tracked on that connection. A `*nats.Subscription`'s callback keeps receiving messages after a reconnect with zero action from this package — directly analogous to go-redis re-issuing `SUBSCRIBE` after reconnecting.
+- `DisconnectErrHandler`, `ReconnectHandler`, and `ClosedHandler` options exist for an application that wants observability into connection state changes, but none of them are required for correctness — they're purely optional hooks.
+
+**Conclusion, consistent with the Redis precedent**: `NATSEventBus` does not reimplement any backoff/reconnect/resubscribe logic. It relies entirely on the `*nats.Conn` supplied by the caller via `New(conn, subject)` — the connection's lifecycle and reconnection policy remain the caller's responsibility, exactly as with `RedisEventBus` and its `*redis.Client`.
+
+**Design mirrors `RedisEventBus` point for point**:
+
+| Concern | RedisEventBus | NATSEventBus |
+|---|---|---|
+| Wire format | JSON (`json.Marshal`/`Unmarshal`) | JSON (`json.Marshal`/`Unmarshal`) — NATS also carries raw bytes, no native Go struct support |
+| Fail-fast on Subscribe | `pubsub.Receive(ctx)` blocks for Redis's subscription ack, or returns an error | `conn.Subscribe(...)` returns an error immediately if the connection cannot accept a new subscription |
+| Per-handler isolation | One goroutine per received event, wrapped in `recover()` (`safeCall`) | Identical: one goroutine per received event, wrapped in `recover()` (`safeCall`) |
+| `Stop()` | Closes every `*redis.PubSub` created by `Subscribe`; idempotent; does not close the shared `*redis.Client` | Unsubscribes every `*nats.Subscription` created by `Subscribe`; idempotent; does not close the shared `*nats.Conn` |
+| Race: `Stop()` vs. in-flight `Subscribe()` | Tracked via a `stopped` flag re-checked under lock after the blocking confirmation step | Identical pattern: a `stopped` flag re-checked under lock after `conn.Subscribe` returns |
+
+**Honest trade-offs versus Redis** (NATS is not a strictly better choice — it is a different one):
+
+- **Delivery semantics.** Core NATS publish/subscribe (used here, same as Redis Pub/Sub) is fire-and-forget and has no persistence: a subscriber that is disconnected when an event is published simply never receives it — there is no replay. This is exactly the same trade-off `RedisEventBus` already makes with Redis Pub/Sub, not a regression specific to NATS. NATS does offer a persistent alternative (JetStream, with at-least-once delivery and replay), but that is a materially different API and delivery model, deliberately out of scope here — `NATSEventBus` targets the same use case as `RedisEventBus`, an immediate, best-effort ban-propagation channel, not a durable event log.
+- **Operational footprint.** Whichever of Redis or NATS a team already runs in production is almost certainly the right choice — this component exists so that choice doesn't force adopting a second piece of infrastructure just for event propagation.
+
+**Testing**: NATS has a direct equivalent to `miniredis` — `github.com/nats-io/nats-server/v2/server` embeds the real NATS server implementation in-process (not a simulation/mock of the protocol, an actual server), started with `server.NewServer(opts)` + `go srv.Start()` + `srv.ReadyForConnections(timeout)`. Combined with `DontListen: true` and `nats.InProcessServer(srv)`, the test connects without ever opening a TCP socket — arguably an even tighter in-process guarantee than `miniredis` provides (which still listens on a TCP or Unix socket). This preserves the toolkit's testability principle: `go test ./...` needs no real NATS server, neither locally nor in CI.
+
+### 10.28 Step 7 (extended) summary — NATSEventBus
+
+| Element | Responsibility |
+|---|---|
+| `NATSEventBus` | `eventbus.EventBus` implementation backed by NATS core pub/sub |
+| `eventbus/nats` | Separate Go sub-module, same pattern as `eventbus/redis` |
+| `nats.go`'s `*nats.Conn` | Owns reconnection and resubscription — verified, not reimplemented |
+| `github.com/nats-io/nats-server/v2/server` | In-process NATS server for tests — the NATS equivalent of `miniredis` |
+| Delivery guarantee | Fire-and-forget, no replay — same class of guarantee as Redis Pub/Sub, not JetStream |
+
 ---
 
 ## 11. Step 8 — Test helpers (tenanttest)
@@ -4050,13 +4100,18 @@ tenant-core/                          (root module)
 │   ├── redis.go
 │   └── redis_test.go (miniredis)
 │
-├── .github/workflows/ci.yml          → Multi-module CI (root + 4 sub-modules)
+├── eventbus/nats/                    → NATSEventBus (SEPARATE Go sub-module)
+│   ├── go.mod        (module .../eventbus/nats)
+│   ├── nats.go
+│   └── nats_test.go (in-process nats-server)
+│
+├── .github/workflows/ci.yml          → Multi-module CI (root + 5 sub-modules)
 ├── LICENSE (MIT)
 ├── README.md
 └── .gitignore
 ```
 
-**Status of the independent Go sub-modules** — `middleware/gin`, `middleware/echo`, `middleware/chi`, and `eventbus/redis` each have their **own `go.mod`**, distinct from the root module. This organization guarantees that a developer using only `net/http` (or only Gin) **never** installs the dependencies of frameworks/technologies they don't use — each sub-module builds and tests independently (`cd middleware/gin && go test ./...`), and the GitHub Actions CI runs a dedicated step per sub-module (`working-directory`), in addition to the step for the root module.
+**Status of the independent Go sub-modules** — `middleware/gin`, `middleware/echo`, `middleware/chi`, `eventbus/redis`, and `eventbus/nats` each have their **own `go.mod`**, distinct from the root module. This organization guarantees that a developer using only `net/http` (or only Gin) **never** installs the dependencies of frameworks/technologies they don't use — each sub-module builds and tests independently (`cd middleware/gin && go test ./...`), and the GitHub Actions CI runs a dedicated step per sub-module (`working-directory`), in addition to the step for the root module.
 
 Each sub-module references the root module via a `replace ... => ../..` directive during development, allowing it to point at the local code before a tagged version is published to the public repository.
 

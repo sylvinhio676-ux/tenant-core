@@ -43,6 +43,12 @@ jobs:
           go vet ./...
           go test -race -v ./...
 
+      - name: Test eventbus/nats submodule
+        working-directory: eventbus/nats
+        run: |
+          go vet ./...
+          go test -race -v ./...
+
       - name: Test metrics/prometheus submodule
         working-directory: metrics/prometheus
         run: |
@@ -134,6 +140,20 @@ jobs:
         with:
           version: latest
           working-directory: eventbus/redis
+
+      - name: go mod verify (eventbus/nats)
+        working-directory: eventbus/nats
+        run: go mod verify
+
+      - name: govulncheck (eventbus/nats)
+        working-directory: eventbus/nats
+        run: govulncheck ./...
+
+      - name: golangci-lint (eventbus/nats)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+          working-directory: eventbus/nats
 
       - name: go mod verify (metrics/prometheus)
         working-directory: metrics/prometheus

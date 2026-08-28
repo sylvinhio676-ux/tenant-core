@@ -6,7 +6,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/stretchr/testify v1.12.1
-	github.com/sylvinhio676-ux/tenant-core v0.2.0
+	github.com/sylvinhio676-ux/tenant-core v0.3.0
 )
 
 require (

@@ -116,3 +116,51 @@ func TestRBAC_Can_RoleIsolatedPerTenant(t *testing.T) {
 	assert.True(t, rbac.Can(tenantB, "billing:write"))
 	assert.False(t, rbac.Can(tenantB, "users:write"))
 }
+
+func TestRBAC_CanActor(t *testing.T) {
+	rbac := New()
+	rbac.DefineRole("org-1", "admin", "users:read", "users:write")
+	rbac.DefineRole("org-1", "viewer", "users:read")
+
+	// Two members of the same tenant hold different roles.
+	admin := Actor{TenantID: "org-1", Roles: []tenant.Role{"admin"}}
+	viewer := Actor{TenantID: "org-1", Roles: []tenant.Role{"viewer"}}
+
+	assert.True(t, rbac.CanActor(admin, "users:write"))
+	assert.True(t, rbac.CanActor(viewer, "users:read"))
+	assert.False(t, rbac.CanActor(viewer, "users:write"))
+}
+
+func TestRBAC_CanActor_MultipleRolesUnion(t *testing.T) {
+	rbac := New()
+	rbac.DefineRole("org-1", "reader", "docs:read")
+	rbac.DefineRole("org-1", "writer", "docs:write")
+
+	actor := Actor{TenantID: "org-1", Roles: []tenant.Role{"reader", "writer"}}
+
+	assert.True(t, rbac.CanActor(actor, "docs:read"))
+	assert.True(t, rbac.CanActor(actor, "docs:write"))
+}
+
+func TestRBAC_CanActor_NoAccess(t *testing.T) {
+	rbac := New()
+	rbac.DefineRole("org-1", "admin", "users:write")
+
+	// Unknown tenant, role defined in another tenant, no roles, zero value.
+	assert.False(t, rbac.CanActor(Actor{TenantID: "org-2", Roles: []tenant.Role{"admin"}}, "users:write"))
+	assert.False(t, rbac.CanActor(Actor{TenantID: "org-1", Roles: []tenant.Role{"ghost"}}, "users:write"))
+	assert.False(t, rbac.CanActor(Actor{TenantID: "org-1"}, "users:write"))
+	assert.False(t, rbac.CanActor(Actor{}, "users:write"))
+}
+
+func TestRBAC_Can_DelegatesToCanActor(t *testing.T) {
+	rbac := New()
+	rbac.DefineRole("org-1", "admin", "users:write")
+
+	tn := &tenant.Tenant{ID: "org-1", Roles: []tenant.Role{"admin"}}
+	actor := Actor{TenantID: tn.ID, Roles: tn.Roles}
+
+	for _, p := range []Permission{"users:write", "users:delete", ""} {
+		assert.Equal(t, rbac.CanActor(actor, p), rbac.Can(tn, p))
+	}
+}

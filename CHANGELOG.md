@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file, one section
 per version, newest first. This file starts tracking from the change below —
 earlier releases (`v0.1.0`, `v0.2.0`) predate it and are not backfilled.
 
+## Unreleased
+
+### Added
+
+- **`rbac`: `Actor` and `RBAC.CanActor` for per-member roles.** When a tenant is an organization with several members, roles belong to each member rather than to the tenant. `rbac.Actor{TenantID, Roles}` is a minimal identity the application builds from its own user model, and `RBAC.CanActor(actor, permission)` checks it. `RBAC.Can(*tenant.Tenant, Permission)` is unchanged and now delegates to `CanActor`. Additive, no breaking change. `Actor` is unrelated to `admin.Principal`, and tenant-core still does no member or identity management.
+
 ## Unreleased (targeting v0.3.0)
 
 ### Breaking

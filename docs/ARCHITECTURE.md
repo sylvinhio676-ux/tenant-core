@@ -1926,6 +1926,23 @@ Tenant
         RBAC
 ```
 
+#### 8.6.1 Organizations with several members: `Actor`
+
+`Tenant.Roles` fits a tenant that is one person. When a tenant is an organization with several members, roles belong to each member, not to the tenant as a whole. For that case `rbac` offers `Actor` and `CanActor`:
+
+```go
+type Actor struct {
+    TenantID tenant.TenantID
+    Roles    []tenant.Role
+}
+
+allowed := rbac.CanActor(rbac.Actor{TenantID: "org-1", Roles: userRoles}, "users.create")
+```
+
+- **Additive**: `Can(*tenant.Tenant, Permission)` is unchanged and simply builds `Actor{TenantID: t.ID, Roles: t.Roles}` before delegating to `CanActor`. Permissions are still defined per tenant, so an `Actor`'s roles are resolved against its own tenant only.
+- **Deliberately minimal**: tenant-core is not a user or membership management system. `Actor` has no notion of member, invitation or identity. The application builds it from its own user model, passing only the tenant ID and the roles relevant to the check.
+- **Not `admin.Principal`**: `Principal` is the authenticated caller of the Admin API. `Actor` is the subject of a tenant-scoped permission check. The two concepts must not be merged.
+
 ### 8.7 Usage example
 
 ```go
